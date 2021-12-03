@@ -18,7 +18,7 @@ void Material::set()
 }
 
 Material texture_material = Material((GLfloat[4]){0.2f, 0.2f, 0.2f, 1.0f},
-							(GLfloat[4]){0.8f, 0.8f, 0.8f, 0.8f},
+							(GLfloat[4]){0.8f, 0.8f, 0.8f, 1.0f},
 							(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f}, 0.0f);
 
 Material black_plastic = Material((GLfloat[4]){0.0f, 0.0f, 0.0f, 1.0f},

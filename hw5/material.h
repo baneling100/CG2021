@@ -12,8 +12,7 @@ class Material
 			 const GLfloat _specular[4], const GLfloat _shininess);
 
 	void set();
-
-  private:
+	
 	GLfloat ambient[4], diffuse[4], specular[4], shininess;
 };
 

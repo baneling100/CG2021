@@ -6,7 +6,7 @@
 #include "light.h"
 #include "model.h"
 
-static unsigned int width = 1280, height = 720;
+static unsigned int width = 1920, height = 1080;
 static bool mouseRotatePressed = false, mouseZoomPressed = false, fullScreen = false;
 static float dist = 1000.0f, fovy = 45.0f, angle_speed = 0.003f, speed = 10.0f;
 static int lastX = 0, lastY = 0, freq = 32;
@@ -18,27 +18,24 @@ Light light = Light(GL_LIGHT0, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 							   (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 							   (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 							   (GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f});
+Model *models[] = {new Background(), new WoodenSphere(), new Dice(), new GlassSphere(), new Table(),
+				   new PokeBall(), new UltraBall(), new NetBall(), new TimerBall(), new MasterBall()};
+Points points; Faces opaque_faces, trans_faces; Images images;
 
-PokeBall pokeball; UltraBall ultraball; NetBall netball;
-TimerBall timerball; MasterBall masterball; Table table;
-Points opaque_points, trans_points, background_points;
-Faces opaque_faces, trans_faces, background_faces;
-GlassSphere glass_sphere; WoodenSphere wooden_sphere; Dice dice; Background background;
-
-class TransFaceCompare {
+class FaceCompare {
   public:
-	TransFaceCompare(glm::vec3 &camera) : camera(camera) {};
+	FaceCompare(glm::vec3 &camera) : camera(camera) {};
 
-	bool operator()(const std::tuple<int, int, int, Material *, unsigned int> &a,
-					const std::tuple<int, int, int, Material *, unsigned int> &b) const {
+	bool operator()(const Face &a,
+					const Face &b) const {
 						const auto &[af1, af2, af3, am, at] = a;
 						const auto &[bf1, bf2, bf3, bm, bt] = b;
-						const auto &[ap1, an1, at1] = trans_points[af1];
-						const auto &[ap2, an2, at2] = trans_points[af2];
-						const auto &[ap3, an3, at3] = trans_points[af3];
-						const auto &[bp1, bn1, bt1] = trans_points[bf1];
-						const auto &[bp2, bn2, bt2] = trans_points[bf2];
-						const auto &[bp3, bn3, bt3] = trans_points[bf3];
+						const auto &[ap1, an1, at1] = points[af1];
+						const auto &[ap2, an2, at2] = points[af2];
+						const auto &[ap3, an3, at3] = points[af3];
+						const auto &[bp1, bn1, bt1] = points[bf1];
+						const auto &[bp2, bn2, bt2] = points[bf2];
+						const auto &[bp3, bn3, bt3] = points[bf3];
 						return std::min(std::min(glm::distance(ap1, camera),
 												 glm::distance(ap2, camera)),
 												 glm::distance(ap3, camera)) >
@@ -52,21 +49,11 @@ class TransFaceCompare {
 
 void init()
 {
-	// preprocess
-	background.parse().collect(background_points, background_faces, trans_points, trans_faces);
-	wooden_sphere.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	glass_sphere.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	dice.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	pokeball.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	ultraball.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	netball.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	timerball.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	masterball.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
-	table.parse().collect(opaque_points, opaque_faces, trans_points, trans_faces);
+	for (int i = 0; i < 10; i++)
+		models[i]->parse().collect(points, opaque_faces, trans_faces, images);
 
 	glClearColor(0.0f, 0.0f, 0.0f, 0.0f); glClearDepth(1.0);
 	glShadeModel(GL_SMOOTH);
-	glEnable(GL_LIGHTING);
 	light.set();
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_BLEND);
@@ -74,23 +61,28 @@ void init()
 	glEnable(GL_DEPTH_TEST);
 }
 
-void draw(Points &points, Faces &faces)
+void draw(Faces &faces)
 {
-	unsigned int texture = 0;
-	Material *material = NULL;
+	static unsigned int texture = 0;
+	static Material *material = nullptr;
 
 	glBegin(GL_TRIANGLES);
 	for (auto &[p1, p2, p3, m, t] : faces) {
+		if (material != m) {
+			glEnd();
+			if (!material) glEnable(GL_LIGHTING);
+			else if (!m) glDisable(GL_LIGHTING);
+			if (m) m->set();
+			material = m;
+			glBegin(GL_TRIANGLES);
+		}
 		if (texture != t) {
 			glEnd();
 			glBindTexture(GL_TEXTURE_2D, t);
 			texture = t;
 			glBegin(GL_TRIANGLES);
 		}
-		if (material != m) {
-			m->set();
-			material = m;
-		}
+
 		auto &[v1, n1, t1] = points[p1];
 		auto &[v2, n2, t2] = points[p2];
 		auto &[v3, n3, t3] = points[p3];
@@ -105,16 +97,9 @@ void display()
 {
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	// draw background
-	glDisable(GL_LIGHTING);
-	draw(background_points, background_faces);
-	glEnable(GL_LIGHTING);
-
-	// draw other opaque faces
-	draw(opaque_points, opaque_faces);
-
-	// draw translucent faces
-	draw(trans_points, trans_faces);
+	// draw faces
+	draw(opaque_faces);
+	draw(trans_faces);
 
 	glFlush();
 	glutSwapBuffers();
@@ -137,7 +122,7 @@ void reshape(int w, int h)
 
 	// depth ordering
 	static int cnt = 0;
-	if (!cnt) std::sort(trans_faces.begin(), trans_faces.end(), TransFaceCompare(camera));
+	if (!cnt) std::sort(trans_faces.begin(), trans_faces.end(), FaceCompare(camera));
 	cnt = (cnt + 1) % freq;
 }
 

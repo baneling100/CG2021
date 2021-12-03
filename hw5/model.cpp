@@ -2,7 +2,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-void parse_stl(std::string &&file_path, Points &points, Faces &faces, Material *material)
+static void parse_stl(std::string &&file_path, Points &points, Faces &faces, Material *material)
 {
 	FILE *fp = fopen(file_path.c_str(), "rb");
 	fseek(fp, 0, SEEK_END);
@@ -77,19 +77,68 @@ void parse_stl(std::string &&file_path, Points &points, Faces &faces, Material *
 	free(buffer);
 }
 
-void collect_part(Points &global_points, Faces &global_faces, Points &local_points, Faces &local_faces)
+static void collect_part(Points &to_points, Faces &to_faces, Points &from_points, Faces &from_faces)
 {
-	int offset = global_points.size();
+	int to_offset = to_points.size();
+
+	for (auto &points : from_points)
+		to_points.emplace_back(points);
 	
-	for (auto &local_point : local_points)
-		global_points.emplace_back(local_point);
+	for (auto &[x, y, z, m, t] : from_faces)
+		to_faces.emplace_back(std::make_tuple(x + to_offset, y + to_offset, z + to_offset, m, t));
+}
+
+void Model::collect(Points &global_points, Faces &opaque_faces, Faces &trans_faces, Images &images)
+{
+	offset = global_points.size();
 	
-	for (auto &[x, y, z, m, t] : local_faces)
-		global_faces.emplace_back(std::make_tuple(x + offset, y + offset, z + offset, m, t));
+	for (auto &points : local_points)
+		global_points.emplace_back(points);
+	
+	for (auto &[x, y, z, m, t] : local_faces) {
+		if (m && (m->ambient[3] < 1.0f || m->diffuse[3] < 1.0f || m->specular[3] < 1.0f))
+			trans_faces.emplace_back(std::make_tuple(x + offset, y + offset, z + offset, m, t));
+		else opaque_faces.emplace_back(std::make_tuple(x + offset, y + offset, z + offset, m, t));
+	}
+
+	if (images.size() < texture) {
+		for (unsigned int i = images.size(); i < texture; i++) images.emplace_back(0, 0, nullptr);
+		images.emplace_back(width, height, image);
+	}
+}
+
+std::tuple<float, Point, Material *, unsigned int> Model::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
+{
+	float min_dist = 0x7fffffff;
+	Point p = std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f));
+	Material *mat = nullptr; unsigned int tex = 0;
+
+	for (auto &[p1, p2, p3, m, t] : local_faces) {
+		auto &[v1, n1, t1] = local_points[p1];
+		auto &[v2, n2, t2] = local_points[p2];
+		auto &[v3, n3, t3] = local_points[p3];
+		
+		glm::vec2 bary; float dist;
+		if (glm::intersectRayTriangle(p0, u, v1, v2, v3, bary, dist))
+			if (min_dist > dist) {
+				min_dist = dist;
+				p = std::make_tuple(bary.x * (v2 - v1) + bary.y * (v3 - v1),
+									bary.x * (n2 - n1) + bary.y * (n3 - n1),
+									bary.x * (t2 - t1) + bary.y * (t3 - t1));
+				mat = m;
+				tex = t;
+			}
+	}
+	return make_tuple(min_dist, p, mat, tex);
 }
 
 Model &PokeBall::parse()
 {
+	local_points.clear(); local_faces.clear();
+
+	Points button_points, inner_shell_points, red_lid_points, white_lid_points;
+	Faces button_faces, inner_shell_faces, red_lid_faces, white_lid_faces;
+
 	parse_stl("models/pokeball/button.stl", button_points, button_faces, &white_plastic);
 	parse_stl("models/pokeball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/pokeball/red_lid.stl", red_lid_points, red_lid_faces, &red_plastic);
@@ -99,34 +148,30 @@ Model &PokeBall::parse()
 		p += glm::vec3(-80.7f, -45.1f, 3.0f);
 
 	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32, glm::vec3(0.0f, 0.0f, 1.0f));
-	for (auto &[p, n, t] : inner_shell_points) {
-		p = quat * p;
-		n = quat * n;
-	}
+	for (auto &[p, n, t] : inner_shell_points) { p = quat * p; n = quat * n; }
 
-	for (auto &[p, n, t] : button_points)
-		p += glm::vec3(-130.9f, 0.0f, -95.1f);
-	for (auto &[p, n, t] : inner_shell_points)
-		p += glm::vec3(-130.9f, 0.0f, -95.1f);
-	for (auto &[p, n, t] : red_lid_points)
-		p += glm::vec3(-130.9f, 0.0f, -95.1f);
-	for (auto &[p, n, t] : white_lid_points)
-		p += glm::vec3(-130.9f, 0.0f, -95.1f);
+	for (auto &[p, n, t] : button_points)      p += glm::vec3(-130.9f, 0.0f, -95.1f);
+	for (auto &[p, n, t] : inner_shell_points) p += glm::vec3(-130.9f, 0.0f, -95.1f);
+	for (auto &[p, n, t] : red_lid_points)     p += glm::vec3(-130.9f, 0.0f, -95.1f);
+	for (auto &[p, n, t] : white_lid_points)   p += glm::vec3(-130.9f, 0.0f, -95.1f);
 	
-	return *this;
-}
+	collect_part(local_points, local_faces, button_points, button_faces);
+	collect_part(local_points, local_faces, inner_shell_points, inner_shell_faces);
+	collect_part(local_points, local_faces, red_lid_points, red_lid_faces);
+	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
 
-void PokeBall::collect(Points &opaque_points, Faces &opaque_faces,
-					   Points &trans_points, Faces &trans_faces)
-{
-	collect_part(opaque_points, opaque_faces, button_points, button_faces);
-	collect_part(opaque_points, opaque_faces, inner_shell_points, inner_shell_faces);
-	collect_part(opaque_points, opaque_faces, red_lid_points, red_lid_faces);
-	collect_part(trans_points, trans_faces, white_lid_points, white_lid_faces);
+	return *this;
 }
 
 Model &MasterBall::parse()
 {
+	local_points.clear(); local_faces.clear();
+
+	Points button_points, inner_shell_points, lid_base_points, white_lid_points, m_letter_points,
+		   bump_1_points, bump_2_points;
+	Faces button_faces, inner_shell_faces, lid_base_faces, white_lid_faces, m_letter_faces,
+		  bump_1_faces, bump_2_faces;
+		  
 	parse_stl("models/masterball/button.stl", button_points, button_faces, &white_plastic);
 	parse_stl("models/masterball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/masterball/lid_base.stl", lid_base_points, lid_base_faces, &purple_plastic);
@@ -139,52 +184,38 @@ Model &MasterBall::parse()
 		p += glm::vec3(-80.7f, -45.1f, 3.0f);
 
 	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32, glm::vec3(0.0f, 0.0f, 1.0f));
-	for (auto &[p, n, t] : inner_shell_points) {
-		p = quat * p;
-		n = quat * n;
-	}
+	for (auto &[p, n, t] : inner_shell_points) { p = quat * p; n = quat * n; }
 
-	for (auto &[p, n, t] : lid_base_points)
-		p += glm::vec3(-12.5f, 41.0f, 0.0f);
-	for (auto &[p, n, t] : bump_1_points)
-		p += glm::vec3(-12.5f, 41.0f, 0.0f);
-	for (auto &[p, n, t] : bump_2_points)
-		p += glm::vec3(-12.5f, 41.0f, 0.0f);
-	for (auto &[p, n, t] : m_letter_points)
-		p += glm::vec3(-12.5f, 41.0f, 0.0f);
+	for (auto &[p, n, t] : lid_base_points) p += glm::vec3(-12.5f, 41.0f, 0.0f);
+	for (auto &[p, n, t] : bump_1_points)   p += glm::vec3(-12.5f, 41.0f, 0.0f);
+	for (auto &[p, n, t] : bump_2_points)   p += glm::vec3(-12.5f, 41.0f, 0.0f);
+	for (auto &[p, n, t] : m_letter_points) p += glm::vec3(-12.5f, 41.0f, 0.0f);
+	for (auto &[p, n, t] : button_points)      p += glm::vec3(-50.0f, 0.0f, -153.9f);
+	for (auto &[p, n, t] : inner_shell_points) p += glm::vec3(-50.0f, 0.0f, -153.9f);
+	for (auto &[p, n, t] : lid_base_points)    p += glm::vec3(-50.0f, 0.0f, -153.9f);
+	for (auto &[p, n, t] : bump_1_points)      p += glm::vec3(-50.0f, 0.0f, -153.9f);
+	for (auto &[p, n, t] : bump_2_points)      p += glm::vec3(-50.0f, 0.0f, -153.9f);
+	for (auto &[p, n, t] : m_letter_points)    p += glm::vec3(-50.0f, 0.0f, -153.9f);
+	for (auto &[p, n, t] : white_lid_points)   p += glm::vec3(-50.0f, 0.0f, -153.9f);
 
-	for (auto &[p, n, t] : button_points)
-		p += glm::vec3(-50.0f, 0.0f, -153.9f);
-	for (auto &[p, n, t] : inner_shell_points)
-		p += glm::vec3(-50.0f, 0.0f, -153.9f);
-	for (auto &[p, n, t] : lid_base_points)
-		p += glm::vec3(-50.0f, 0.0f, -153.9f);
-	for (auto &[p, n, t] : bump_1_points)
-		p += glm::vec3(-50.0f, 0.0f, -153.9f);
-	for (auto &[p, n, t] : bump_2_points)
-		p += glm::vec3(-50.0f, 0.0f, -153.9f);
-	for (auto &[p, n, t] : m_letter_points)
-		p += glm::vec3(-50.0f, 0.0f, -153.9f);
-	for (auto &[p, n, t] : white_lid_points)
-		p += glm::vec3(-50.0f, 0.0f, -153.9f);
+	collect_part(local_points, local_faces, button_points, button_faces);
+	collect_part(local_points, local_faces, inner_shell_points, inner_shell_faces);
+	collect_part(local_points, local_faces, lid_base_points, lid_base_faces);
+	collect_part(local_points, local_faces, bump_1_points, bump_1_faces);
+	collect_part(local_points, local_faces, bump_2_points, bump_2_faces);
+	collect_part(local_points, local_faces, m_letter_points, m_letter_faces);
+	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
 
 	return *this;
 }
 
-void MasterBall::collect(Points &opaque_points, Faces &opaque_faces,
-						 Points &trans_points, Faces &trans_faces)
-{
-	collect_part(opaque_points, opaque_faces, button_points, button_faces);
-	collect_part(opaque_points, opaque_faces, inner_shell_points, inner_shell_faces);
-	collect_part(opaque_points, opaque_faces, lid_base_points, lid_base_faces);
-	collect_part(opaque_points, opaque_faces, bump_1_points, bump_1_faces);
-	collect_part(opaque_points, opaque_faces, bump_2_points, bump_2_faces);
-	collect_part(opaque_points, opaque_faces, m_letter_points, m_letter_faces);
-	collect_part(trans_points, trans_faces, white_lid_points, white_lid_faces);
-}
-
 Model &NetBall::parse()
 {
+	local_points.clear(); local_faces.clear();
+
+	Points button_points, inner_shell_points, lid_base_points, net_points, white_lid_points;
+	Faces button_faces, inner_shell_faces, lid_base_faces, net_faces, white_lid_faces;
+
 	parse_stl("models/netball/button.stl", button_points, button_faces, &white_plastic);
 	parse_stl("models/netball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/netball/lid_base.stl", lid_base_points, lid_base_faces, &cyan_plastic);
@@ -195,37 +226,32 @@ Model &NetBall::parse()
 		p += glm::vec3(-80.7f, -45.1f, 3.0f);
 
 	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32, glm::vec3(0.0f, 0.0f, 1.0f));
-	for (auto &[p, n, t] : inner_shell_points) {
-		p = quat * p;
-		n = quat * n;
-	}
+	for (auto &[p, n, t] : inner_shell_points) { p = quat * p; n = quat * n; }
 
-	for (auto &[p, n, t] : button_points)
-		p += glm::vec3(30.9f, 0.0f, -95.1f);
-	for (auto &[p, n, t] : inner_shell_points)
-		p += glm::vec3(30.9f, 0.0f, -95.1f);
-	for (auto &[p, n, t] : net_points)
-		p += glm::vec3(30.9f, 0.0f, -98.3f);
-	for (auto &[p, n, t] : lid_base_points)
-		p += glm::vec3(30.9f, 0.0f, -98.3f);
-	for (auto &[p, n, t] : white_lid_points)
-		p += glm::vec3(30.9f, 0.0f, -95.1f);
+	for (auto &[p, n, t] : button_points)      p += glm::vec3(30.9f, 0.0f, -95.1f);
+	for (auto &[p, n, t] : inner_shell_points) p += glm::vec3(30.9f, 0.0f, -95.1f);
+	for (auto &[p, n, t] : net_points)         p += glm::vec3(30.9f, 0.0f, -98.3f);
+	for (auto &[p, n, t] : lid_base_points)    p += glm::vec3(30.9f, 0.0f, -98.3f);
+	for (auto &[p, n, t] : white_lid_points)   p += glm::vec3(30.9f, 0.0f, -95.1f);
+
+	collect_part(local_points, local_faces, button_points, button_faces);
+	collect_part(local_points, local_faces, inner_shell_points, inner_shell_faces);
+	collect_part(local_points, local_faces, net_points, net_faces);
+	collect_part(local_points, local_faces, lid_base_points, lid_base_faces);
+	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
 
 	return *this;
 }
 
-void NetBall::collect(Points &opaque_points, Faces &opaque_faces,
-					  Points &trans_points, Faces &trans_faces)
-{
-	collect_part(opaque_points, opaque_faces, button_points, button_faces);
-	collect_part(opaque_points, opaque_faces, inner_shell_points, inner_shell_faces);
-	collect_part(opaque_points, opaque_faces, net_points, net_faces);
-	collect_part(opaque_points, opaque_faces, lid_base_points, lid_base_faces);
-	collect_part(trans_points, trans_faces, white_lid_points, white_lid_faces);
-}
-
 Model &TimerBall::parse()
 {
+	local_points.clear(); local_faces.clear();
+
+	Points button_points, inner_shell_points, lid_black_points, lid_bottom_points, lid_top_points,
+		   stripes_lower_points, stripes_upper_points, top_stripe_points;
+	Faces button_faces, inner_shell_faces, lid_black_faces, lid_bottom_faces, lid_top_faces,
+		  stripes_lower_faces, stripes_upper_faces, top_stripe_faces;
+
 	parse_stl("models/timerball/button.stl", button_points, button_faces, &white_plastic);
 	parse_stl("models/timerball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/timerball/lid_top.stl", lid_top_points, lid_top_faces, &white_plastic);
@@ -235,113 +261,78 @@ Model &TimerBall::parse()
 	parse_stl("models/timerball/stripes_upper.stl", stripes_upper_points, stripes_upper_faces, &red_plastic);
 	parse_stl("models/timerball/top_stripe.stl", top_stripe_points, top_stripe_faces, &red_plastic);
 
-	for (auto &[p, n, t] : inner_shell_points)
-		p += glm::vec3(-80.7f, -45.1f, 3.0f);
-
+	for (auto &[p, n, t] : inner_shell_points) p += glm::vec3(-80.7f, -45.1f, 3.0f);
 	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32, glm::vec3(0.0f, 0.0f, 1.0f));
-	for (auto &[p, n, t] : inner_shell_points) {
-		p = quat * p;
-		n = quat * n;
-	}
+	for (auto &[p, n, t] : inner_shell_points) { p = quat * p; n = quat * n; }
+	for (auto &[p, n, t] : button_points)        p.x -= 100.0f;
+	for (auto &[p, n, t] : inner_shell_points)   p.x -= 100.0f;
+	for (auto &[p, n, t] : lid_top_points)       p.x -= 100.0f;
+	for (auto &[p, n, t] : lid_bottom_points)    p.x -= 100.0f;
+	for (auto &[p, n, t] : lid_black_points)     p.x -= 100.0f;
+	for (auto &[p, n, t] : stripes_lower_points) p.x -= 100.0f;
+	for (auto &[p, n, t] : stripes_upper_points) p.x -= 100.0f;
+	for (auto &[p, n, t] : top_stripe_points)    p.x -= 100.0f;
 
-	quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32 * 1.0f / 180.0f, glm::vec3(1.0f, 0.0f, 0.0f));
-	for (auto &[p, n, t] : top_stripe_points) {
-		p = quat * p;
-		n = quat * n;
-	}
-
-	for (auto &[p, n, t] : button_points)
-		p.x -= 100.0f;
-	for (auto &[p, n, t] : inner_shell_points)
-		p.x -= 100.0f;
-	for (auto &[p, n, t] : lid_top_points)
-		p.x -= 100.0f;
-	for (auto &[p, n, t] : lid_bottom_points)
-		p.x -= 100.0f;
-	for (auto &[p, n, t] : lid_black_points)
-		p.x -= 100.0f;
-	for (auto &[p, n, t] : stripes_lower_points)
-		p.x -= 100.0f;
-	for (auto &[p, n, t] : stripes_upper_points)
-		p.x -= 100.0f;
-	for (auto &[p, n, t] : top_stripe_points)
-		p.x -= 100.0f;
+	collect_part(local_points, local_faces, button_points, button_faces);
+	collect_part(local_points, local_faces, inner_shell_points, inner_shell_faces);
+	collect_part(local_points, local_faces, lid_top_points, lid_top_faces);
+	collect_part(local_points, local_faces, lid_bottom_points, lid_bottom_faces);
+	collect_part(local_points, local_faces, lid_black_points, lid_black_faces);
+	collect_part(local_points, local_faces, stripes_lower_points, stripes_lower_faces);
+	collect_part(local_points, local_faces, stripes_upper_points, stripes_upper_faces);
+	collect_part(local_points, local_faces, top_stripe_points, top_stripe_faces);
 
 	return *this;
 }
 
-void TimerBall::collect(Points &opaque_points, Faces &opaque_faces,
-						Points &trans_points, Faces &trans_faces)
-{
-	collect_part(opaque_points, opaque_faces, button_points, button_faces);
-	collect_part(opaque_points, opaque_faces, inner_shell_points, inner_shell_faces);
-	collect_part(opaque_points, opaque_faces, lid_top_points, lid_top_faces);
-	collect_part(trans_points, trans_faces, lid_bottom_points, lid_bottom_faces);
-	collect_part(opaque_points, opaque_faces, lid_black_points, lid_black_faces);
-	collect_part(opaque_points, opaque_faces, stripes_lower_points, stripes_lower_faces);
-	collect_part(opaque_points, opaque_faces, stripes_upper_points, stripes_upper_faces);
-	collect_part(opaque_points, opaque_faces, top_stripe_points, top_stripe_faces);
-}
-
 Model &UltraBall::parse()
 {
+	local_points.clear(); local_faces.clear();
+
+	Points button_points, inner_shell_points, lid_black_points, lid_yellow_points, white_lid_points;
+	Faces button_faces, inner_shell_faces, lid_black_faces, lid_yellow_faces, white_lid_faces;
+
 	parse_stl("models/ultraball/button.stl", button_points, button_faces, &white_plastic);
 	parse_stl("models/ultraball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/ultraball/lid_black.stl", lid_black_points, lid_black_faces, &black_plastic);
 	parse_stl("models/ultraball/white_lid.stl", white_lid_points, white_lid_faces, &white_plastic_trans);
 	parse_stl("models/ultraball/lid_yellow.stl", lid_yellow_points, lid_yellow_faces, &yellow_plastic);
 
-	for (auto &[p, n, t] : inner_shell_points)
-		p += glm::vec3(-80.7f, -45.1f, 3.0f);
+	for (auto &[p, n, t] : inner_shell_points) p += glm::vec3(-80.7f, -45.1f, 3.0f);
 
 	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32, glm::vec3(0.0f, 0.0f, 1.0f));
-	for (auto &[p, n, t] : inner_shell_points) {
-		p = quat * p;
-		n = quat * n;
-	}
+	for (auto &[p, n, t] : inner_shell_points) { p = quat * p; n = quat * n; }
 
-	for (auto &[p, n, t] : lid_black_points)
-		p.y += 41.0f;
-	for (auto &[p, n, t] : lid_yellow_points)
-		p.y += 41.0f;
+	for (auto &[p, n, t] : lid_black_points)   p.y += 41.0f;
+	for (auto &[p, n, t] : lid_yellow_points)  p.y += 41.0f;
+
+	collect_part(local_points, local_faces, button_points, button_faces);
+	collect_part(local_points, local_faces, inner_shell_points, inner_shell_faces);
+	collect_part(local_points, local_faces, lid_black_points, lid_black_faces);
+	collect_part(local_points, local_faces, lid_yellow_points, lid_yellow_faces);
+	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
 
 	return *this;
-}
-
-void UltraBall::collect(Points &opaque_points, Faces &opaque_faces,
-						Points &trans_points, Faces &trans_faces)
-{
-	collect_part(opaque_points, opaque_faces, button_points, button_faces);
-	collect_part(opaque_points, opaque_faces, inner_shell_points, inner_shell_faces);
-	collect_part(opaque_points, opaque_faces, lid_black_points, lid_black_faces);
-	collect_part(opaque_points, opaque_faces, lid_yellow_points, lid_yellow_faces);
-	collect_part(trans_points, trans_faces, white_lid_points, white_lid_faces);
 }
 
 Model &Table::parse()
 {
-	parse_stl("models/table.stl", table_points, table_faces, &green_plastic);
+	local_points.clear(); local_faces.clear();
 
-	for (auto &[p, n, t] : table_points)
-		p = 7500.0f * p + glm::vec3(0.0f, -250.0f, 0.0f);
+	parse_stl("models/table.stl", local_points, local_faces, &green_plastic);
+
+	for (auto &[p, n, t] : local_points) p = 7500.0f * p + glm::vec3(0.0f, -250.0f, 0.0f);
 
 	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32 / 3.0f, glm::vec3(0.0f, 1.0f, 0.0f));
-	for (auto &[p, n, t] : table_points) {
-		p = quat * p;
-		n = quat * n;
-	}
+	for (auto &[p, n, t] : local_points) { p = quat * p; n = quat * n; }
 
 	return *this;
 }
 
-void Table::collect(Points &opaque_points, Faces &opaque_faces,
-					Points &trans_points, Faces &trans_faces)
-{
-	collect_part(opaque_points, opaque_faces, table_points, table_faces);
-}
-
 Model &GlassSphere::parse()
 {
+	local_points.clear(); local_faces.clear();
+	
 	int h = 32;
 	int w = 2 * h;
 	int cnt = 0;
@@ -363,57 +354,58 @@ Model &GlassSphere::parse()
 			if (point_map.find(p1) == point_map.end()) {
 				idx1 = cnt++;
 				point_map[p1] = idx1;
-				sphere_points.emplace_back(p1, p1, glm::vec2(0.0f, 0.0f));
+				local_points.emplace_back(p1, p1, glm::vec2(0.0f, 0.0f));
 			}
 			else idx1 = point_map[p1];
 			if (point_map.find(p2) == point_map.end()) {
 				idx2 = cnt++;
 				point_map[p2] = idx2;
-				sphere_points.emplace_back(p2, p2, glm::vec2(0.0f, 0.0f));
+				local_points.emplace_back(p2, p2, glm::vec2(0.0f, 0.0f));
 			}
 			else idx2 = point_map[p2];
 			if (point_map.find(p3) == point_map.end()) {
 				idx3 = cnt++;
 				point_map[p3] = idx3;
-				sphere_points.emplace_back(p3, p3, glm::vec2(0.0f, 0.0f));
+				local_points.emplace_back(p3, p3, glm::vec2(0.0f, 0.0f));
 			}
 			else idx3 = point_map[p3];
 			if (point_map.find(p4) == point_map.end()) {
 				idx3 = cnt++;
 				point_map[p4] = idx4;
-				sphere_points.emplace_back(p4, p4, glm::vec2(0.0f, 0.0f));
+				local_points.emplace_back(p4, p4, glm::vec2(0.0f, 0.0f));
 			}
 			else idx4 = point_map[p4];
 
-			sphere_faces.emplace_back(idx1, idx2, idx3, &white_plastic_trans, 0);
-			sphere_faces.emplace_back(idx3, idx4, idx1, &white_plastic_trans, 0);
+			local_faces.emplace_back(idx1, idx2, idx3, &white_plastic_trans, 0);
+			local_faces.emplace_back(idx3, idx4, idx1, &white_plastic_trans, 0);
 		}
 
-	for (auto &[p, n, t] : sphere_points)
-		p = 40.0f * p + glm::vec3(-7.0f, -51.0f, 85.4f);
+	for (auto &[p, n, t] : local_points) p = 40.0f * p + glm::vec3(-7.0f, -51.0f, 85.4f);
 
 	return *this;
 }
 
-void GlassSphere::collect(Points &opaque_points, Faces &opaque_faces,
-						  Points &trans_points, Faces &trans_faces)
+std::tuple<float, Point, Material *, unsigned int> GlassSphere::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
 {
-	collect_part(trans_points, trans_faces, sphere_points, sphere_faces);
+	glm::vec3 p, n;
+
+	if (glm::intersectRaySphere(p0, u, glm::vec3(-7.0f, -51.0f, 85.4f), 1600.0f, p, n))
+		return std::make_tuple(glm::distance(p0, p), std::make_tuple(p, n, glm::vec2(0.0f, 0.0f)), &white_plastic_trans, 0);
+	return std::make_tuple(0x7fffffff, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0);
 }
 
 Model &WoodenSphere::parse()
 {
-	int width, height, num_channels;
-	unsigned char *image = stbi_load("textures/wood.jpg", &width, &height, &num_channels, 3);
+	local_points.clear(); local_faces.clear();
 
-	glGenTextures(1, &wooden_texture);
-	glBindTexture(GL_TEXTURE_2D, wooden_texture);
+	int num_channels;
+	image = stbi_load("textures/wood.jpg", &width, &height, &num_channels, 3);
+
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
-	
-	stbi_image_free(image);
-
 
 	int h = 32;
 	int w = h * width / height;
@@ -424,8 +416,8 @@ Model &WoodenSphere::parse()
 		for (int j = 1; j < w; j++) {
 			float theta0 = M_PIf32 * (i - 1) / (h - 1);
 			float theta1 = M_PIf32 * i / (h - 1);
-			float phi0 = 2.0f * M_PIf32 * (j - 1) / (w - 1) - M_PI_4f32;
-			float phi1 = 2.0f * M_PIf32 * j / (w - 1) - M_PI_4f32;
+			float phi0 = 2.0f * M_PIf32 * (j - 1) / (w - 1);
+			float phi1 = 2.0f * M_PIf32 * j / (w - 1);
 
 			glm::vec2 t1 = glm::vec2((float)(j - 1) / (w - 1), (float)(i - 1) / (h - 1));
 			glm::vec2 t2 = glm::vec2((float)(j - 1) / (w - 1), (float)i / (h - 1));
@@ -441,98 +433,108 @@ Model &WoodenSphere::parse()
 			if (point_map.find(p1) == point_map.end()) {
 				idx1 = cnt++;
 				point_map[p1] = idx1;
-				wooden_points.emplace_back(p1, p1, t1);
+				local_points.emplace_back(p1, p1, t1);
 			}
 			else idx1 = point_map[p1];
 			if (point_map.find(p2) == point_map.end()) {
 				idx2 = cnt++;
 				point_map[p2] = idx2;
-				wooden_points.emplace_back(p2, p2, t2);
+				local_points.emplace_back(p2, p2, t2);
 			}
 			else idx2 = point_map[p2];
 			if (point_map.find(p3) == point_map.end()) {
 				idx3 = cnt++;
 				point_map[p3] = idx3;
-				wooden_points.emplace_back(p3, p3, t3);
+				local_points.emplace_back(p3, p3, t3);
 			}
 			else idx3 = point_map[p3];
 			if (point_map.find(p4) == point_map.end()) {
 				idx3 = cnt++;
 				point_map[p4] = idx4;
-				wooden_points.emplace_back(p4, p4, t4);
+				local_points.emplace_back(p4, p4, t4);
 			}
 			else idx4 = point_map[p4];
 
-			wooden_faces.emplace_back(idx1, idx2, idx3, &texture_material, wooden_texture);
-			wooden_faces.emplace_back(idx3, idx4, idx1, &texture_material, wooden_texture);
+			local_faces.emplace_back(idx1, idx2, idx3, &texture_material, texture);
+			local_faces.emplace_back(idx3, idx4, idx1, &texture_material, texture);
 		}
 
-	for (auto &[p, n, t] : wooden_points)
-		p = 40.0f * p + glm::vec3(93.7f, -51.0f, -87.7f);
+	for (auto &[p, n, t] : local_points) p = 40.0f * p + glm::vec3(93.7f, -51.0f, -87.7f);
 
 	return *this;
 }
 
-void WoodenSphere::collect(Points &opaque_points, Faces &opaque_faces,
-						   Points &trans_points, Faces &trans_faces)
+std::tuple<float, Point, Material *, unsigned int> WoodenSphere::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
 {
-	collect_part(opaque_points, opaque_faces, wooden_points, wooden_faces);
+	glm::vec3 p, n;
+
+	if (glm::intersectRaySphere(p0, u, glm::vec3(93.7f, -51.0f, -87.7f), 1600.0f, p, n)) {
+		glm::vec3 q = p / 40.0f;
+		float cos_theta = q.y;
+		float theta = std::acos(cos_theta);
+		float sin_theta = std::sqrt(1 - cos_theta * cos_theta);
+		float cos_phi = q.x / sin_theta, sin_phi = q.z / sin_theta;
+		float phi = std::atan2(sin_phi, cos_phi);
+		if (phi < 0) phi += 2.0f * M_PIf32;
+		return std::make_tuple(glm::distance(p0, p), std::make_tuple(p, n, glm::vec2(phi / (2.0f * M_PIf32), theta / M_PIf32)), &texture_material, texture);
+	}
+	return std::make_tuple(0x7fffffff, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0);
 }
 
 Model &Dice::parse()
 {
-	int width, height, num_channels;
-	unsigned char *image = stbi_load("textures/dice.png", &width, &height, &num_channels, 3);
+	local_points.clear(); local_faces.clear();
 
-	glGenTextures(1, &dice_texture);
-	glBindTexture(GL_TEXTURE_2D, dice_texture);
+	int num_channels;
+	image = stbi_load("textures/dice.png", &width, &height, &num_channels, 3);
+
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
-	
-	stbi_image_free(image);
 
-	dice_points.emplace_back(glm::vec3( 1.0f, -1.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.00f, 0.50f));
-	dice_points.emplace_back(glm::vec3( 1.0f, -1.0f,  1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.00f, 0.75f));
-	dice_points.emplace_back(glm::vec3(-1.0f, -1.0f,  1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.25f, 0.75f));
-	dice_points.emplace_back(glm::vec3(-1.0f, -1.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.25f, 0.50f));
-	dice_points.emplace_back(glm::vec3(-1.0f, -1.0f, -1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.25f, 0.50f));
-	dice_points.emplace_back(glm::vec3(-1.0f, -1.0f,  1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.25f, 0.75f));
-	dice_points.emplace_back(glm::vec3(-1.0f,  1.0f,  1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.50f, 0.75f));
-	dice_points.emplace_back(glm::vec3(-1.0f,  1.0f, -1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.50f, 0.50f));
-	dice_points.emplace_back(glm::vec3(-1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.50f, 0.50f));
-	dice_points.emplace_back(glm::vec3(-1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.50f, 0.75f));
-	dice_points.emplace_back(glm::vec3( 1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.75f, 0.75f));
-	dice_points.emplace_back(glm::vec3( 1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.75f, 0.50f));
-	dice_points.emplace_back(glm::vec3( 1.0f,  1.0f, -1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.75f, 0.50f));
-	dice_points.emplace_back(glm::vec3( 1.0f,  1.0f,  1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.75f, 0.75f));
-	dice_points.emplace_back(glm::vec3( 1.0f, -1.0f,  1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.00f, 0.75f));
-	dice_points.emplace_back(glm::vec3( 1.0f, -1.0f, -1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.00f, 0.50f));
-	dice_points.emplace_back(glm::vec3(-1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.50f, 0.75f));
-	dice_points.emplace_back(glm::vec3(-1.0f, -1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.50f, 1.00f));
-	dice_points.emplace_back(glm::vec3( 1.0f, -1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.75f, 1.00f));
-	dice_points.emplace_back(glm::vec3( 1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.75f, 0.75f));
-	dice_points.emplace_back(glm::vec3(-1.0f, -1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.50f, 0.25f));
-	dice_points.emplace_back(glm::vec3(-1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.50f, 0.50f));
-	dice_points.emplace_back(glm::vec3( 1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.75f, 0.50f));
-	dice_points.emplace_back(glm::vec3( 1.0f, -1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.75f, 0.25f));
+	local_points.emplace_back(glm::vec3( 1.0f, -1.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.00f, 0.50f));
+	local_points.emplace_back(glm::vec3( 1.0f, -1.0f,  1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.00f, 0.75f));
+	local_points.emplace_back(glm::vec3(-1.0f, -1.0f,  1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.25f, 0.75f));
+	local_points.emplace_back(glm::vec3(-1.0f, -1.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec2(0.25f, 0.50f));
+	local_points.emplace_back(glm::vec3(-1.0f, -1.0f, -1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.25f, 0.50f));
+	local_points.emplace_back(glm::vec3(-1.0f, -1.0f,  1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.25f, 0.75f));
+	local_points.emplace_back(glm::vec3(-1.0f,  1.0f,  1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.50f, 0.75f));
+	local_points.emplace_back(glm::vec3(-1.0f,  1.0f, -1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.50f, 0.50f));
+	local_points.emplace_back(glm::vec3(-1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.50f, 0.50f));
+	local_points.emplace_back(glm::vec3(-1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.50f, 0.75f));
+	local_points.emplace_back(glm::vec3( 1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.75f, 0.75f));
+	local_points.emplace_back(glm::vec3( 1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.75f, 0.50f));
+	local_points.emplace_back(glm::vec3( 1.0f,  1.0f, -1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.75f, 0.50f));
+	local_points.emplace_back(glm::vec3( 1.0f,  1.0f,  1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.75f, 0.75f));
+	local_points.emplace_back(glm::vec3( 1.0f, -1.0f,  1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.00f, 0.75f));
+	local_points.emplace_back(glm::vec3( 1.0f, -1.0f, -1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.00f, 0.50f));
+	local_points.emplace_back(glm::vec3(-1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.50f, 0.75f));
+	local_points.emplace_back(glm::vec3(-1.0f, -1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.50f, 1.00f));
+	local_points.emplace_back(glm::vec3( 1.0f, -1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.75f, 1.00f));
+	local_points.emplace_back(glm::vec3( 1.0f,  1.0f,  1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.75f, 0.75f));
+	local_points.emplace_back(glm::vec3(-1.0f, -1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.50f, 0.25f));
+	local_points.emplace_back(glm::vec3(-1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.50f, 0.50f));
+	local_points.emplace_back(glm::vec3( 1.0f,  1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.75f, 0.50f));
+	local_points.emplace_back(glm::vec3( 1.0f, -1.0f, -1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec2(0.75f, 0.25f));
 
-	dice_faces.emplace_back( 0,  1,  2, &texture_material, dice_texture);
-	dice_faces.emplace_back( 2,  3,  0, &texture_material, dice_texture);
-	dice_faces.emplace_back( 4,  5,  6, &texture_material, dice_texture);
-	dice_faces.emplace_back( 6,  7,  4, &texture_material, dice_texture);
-	dice_faces.emplace_back( 8,  9, 10, &texture_material, dice_texture);
-	dice_faces.emplace_back(10, 11,  8, &texture_material, dice_texture);
-	dice_faces.emplace_back(12, 13, 14, &texture_material, dice_texture);
-	dice_faces.emplace_back(14, 15, 12, &texture_material, dice_texture);
-	dice_faces.emplace_back(16, 17, 18, &texture_material, dice_texture);
-	dice_faces.emplace_back(18, 19, 16, &texture_material, dice_texture);
-	dice_faces.emplace_back(20, 21, 22, &texture_material, dice_texture);
-	dice_faces.emplace_back(22, 23, 20, &texture_material, dice_texture);
+	local_faces.emplace_back( 0,  1,  2, &texture_material, texture);
+	local_faces.emplace_back( 2,  3,  0, &texture_material, texture);
+	local_faces.emplace_back( 4,  5,  6, &texture_material, texture);
+	local_faces.emplace_back( 6,  7,  4, &texture_material, texture);
+	local_faces.emplace_back( 8,  9, 10, &texture_material, texture);
+	local_faces.emplace_back(10, 11,  8, &texture_material, texture);
+	local_faces.emplace_back(12, 13, 14, &texture_material, texture);
+	local_faces.emplace_back(14, 15, 12, &texture_material, texture);
+	local_faces.emplace_back(16, 17, 18, &texture_material, texture);
+	local_faces.emplace_back(18, 19, 16, &texture_material, texture);
+	local_faces.emplace_back(20, 21, 22, &texture_material, texture);
+	local_faces.emplace_back(22, 23, 20, &texture_material, texture);
 
 	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PI_4f32, glm::vec3(1.0f, 0.0f, 0.0f));
 	quat = glm::rotate(quat, M_PI_4f32, glm::vec3(0.0f, 0.0f, 1.0f));
-	for (auto &[p, n, t] : dice_points) {
+	for (auto &[p, n, t] : local_points) {
 		p = 30.0f * (quat * p) + glm::vec3(-107.0f, -39.0f, -87.7f);
 		n = quat * n;
 	}
@@ -540,25 +542,18 @@ Model &Dice::parse()
 	return *this;
 }
 
-void Dice::collect(Points &opaque_points, Faces &opaque_faces,
-				   Points &trans_points, Faces &trans_faces)
-{
-	collect_part(opaque_points, opaque_faces, dice_points, dice_faces);
-}
-
 Model &Background::parse()
 {
-	int width, height, num_channels;
-	unsigned char *image = stbi_load("textures/background.jpg", &width, &height, &num_channels, 3);
+	local_points.clear(); local_faces.clear();
 
-	glGenTextures(1, &background_texture);
-	glBindTexture(GL_TEXTURE_2D, background_texture);
+	int  num_channels;
+	image = stbi_load("textures/background.jpg", &width, &height, &num_channels, 3);
+
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
-	
-	stbi_image_free(image);
-
 
 	int h = 32;
 	int w = h * width / height;
@@ -586,40 +581,51 @@ Model &Background::parse()
 			if (point_map.find(p1) == point_map.end()) {
 				idx1 = cnt++;
 				point_map[p1] = idx1;
-				background_points.emplace_back(p1, p1, t1);
+				local_points.emplace_back(p1, p1, t1);
 			}
 			else idx1 = point_map[p1];
 			if (point_map.find(p2) == point_map.end()) {
 				idx2 = cnt++;
 				point_map[p2] = idx2;
-				background_points.emplace_back(p2, p2, t2);
+				local_points.emplace_back(p2, p2, t2);
 			}
 			else idx2 = point_map[p2];
 			if (point_map.find(p3) == point_map.end()) {
 				idx3 = cnt++;
 				point_map[p3] = idx3;
-				background_points.emplace_back(p3, p3, t3);
+				local_points.emplace_back(p3, p3, t3);
 			}
 			else idx3 = point_map[p3];
 			if (point_map.find(p4) == point_map.end()) {
 				idx3 = cnt++;
 				point_map[p4] = idx4;
-				background_points.emplace_back(p4, p4, t4);
+				local_points.emplace_back(p4, p4, t4);
 			}
 			else idx4 = point_map[p4];
 
-			background_faces.emplace_back(idx1, idx2, idx3, &texture_material, background_texture);
-			background_faces.emplace_back(idx3, idx4, idx1, &texture_material, background_texture);
+			local_faces.emplace_back(idx1, idx2, idx3, nullptr, texture);
+			local_faces.emplace_back(idx3, idx4, idx1, nullptr, texture);
 		}
 
-	for (auto &[p, n, t] : background_points)
-		p = 1250.0f * p;
+	for (auto &[p, n, t] : local_points) p = 1250.0f * p;
 
 	return *this;
 }
 
-void Background::collect(Points &opaque_points, Faces &opaque_faces,
-						 Points &trans_points, Faces &trans_faces)
+std::tuple<float, Point, Material *, unsigned int> Background::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
 {
-	collect_part(opaque_points, opaque_faces, background_points, background_faces);
+	glm::vec3 p, n;
+
+	if (glm::intersectRaySphere(p0, u, glm::vec3(0.0f, 0.0f, 0.0f), 1562500.0f, p, n)) {
+		glm::vec3 q = p / 1250.0f;
+		float cos_theta = q.y;
+		float theta = std::acos(cos_theta);
+		float sin_theta = std::sqrt(1 - cos_theta * cos_theta);
+		float cos_phi = q.x / sin_theta, sin_phi = q.z / sin_theta;
+		float phi = std::atan2(sin_phi, cos_phi);
+		if (phi < -M_PI_4f32) phi += 2.0f * M_PIf32;
+		phi += M_PI_4f32;
+		return std::make_tuple(glm::distance(p0, p), std::make_tuple(p, n, glm::vec2(phi / (2.0f * M_PIf32), theta / M_PIf32)), nullptr, texture);
+	}
+	return std::make_tuple(0x7fffffff, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0);
 }
