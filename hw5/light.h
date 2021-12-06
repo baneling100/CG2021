@@ -13,7 +13,7 @@ class Light
 	
 	void set();
 
-  private:
+  public:
 	GLenum light;
 	GLfloat ambient[4], diffuse[4], specular[4], position[4];
 };

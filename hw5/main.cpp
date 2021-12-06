@@ -1,24 +1,35 @@
-#include <math.h>
+#include <cmath>
+#include <string>
+#include <filesystem>
 #include <GL/glut.h>
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
 
 #include "light.h"
 #include "model.h"
+#include "export.h"
 
-static unsigned int width = 1920, height = 1080;
+static unsigned int width = 1280, height = 720;
 static bool mouseRotatePressed = false, mouseZoomPressed = false, fullScreen = false;
 static float dist = 1000.0f, fovy = 45.0f, angle_speed = 0.003f, speed = 10.0f;
-static int lastX = 0, lastY = 0, freq = 32;
+static int lastX = 0, lastY = 0, freq = 32, num_threads = 1;
 static glm::vec3 axisZ = glm::vec3(0.0f, 0.0f, 1.0f); // orientation
 static glm::vec3 axisY = glm::vec3(0.0f, 1.0f, 0.0f); // view-up vector
 static glm::vec3 origin = glm::vec3(0.0f, 0.0f, 0.0f);
 
-Light light = Light(GL_LIGHT0, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
-							   (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
-							   (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
-							   (GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f});
-Model *models[] = {new Background(), new WoodenSphere(), new Dice(), new GlassSphere(), new Table(),
+Light *lights[] = {new Light(GL_LIGHT0, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f}),
+				   new Light(GL_LIGHT1, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f}),
+				   new Light(GL_LIGHT2, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
+										(GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f})};
+Model *models[] = {new Background(), new WoodenSphere(), new Dice(), new MirrorSphere(), new Table(),
 				   new PokeBall(), new UltraBall(), new NetBall(), new TimerBall(), new MasterBall()};
 Points points; Faces opaque_faces, trans_faces; Images images;
 
@@ -54,7 +65,7 @@ void init()
 
 	glClearColor(0.0f, 0.0f, 0.0f, 0.0f); glClearDepth(1.0);
 	glShadeModel(GL_SMOOTH);
-	light.set();
+	for (int i = 0; i < 3; i++) lights[i]->set();
 	glEnable(GL_TEXTURE_2D);
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -126,6 +137,14 @@ void reshape(int w, int h)
 	cnt = (cnt + 1) % freq;
 }
 
+std::string get_filename(std::string &&pred)
+{
+	static int cnt = 0;
+	std::string filename;
+	while (std::filesystem::exists(filename = (pred + std::to_string(cnt) + ".bmp"))) cnt++;
+	return filename;
+}
+
 void keyboardCB(unsigned char keyPressed, int x, int y)
 {
 	switch (keyPressed) {
@@ -156,21 +175,62 @@ void keyboardCB(unsigned char keyPressed, int x, int y)
 		reshape(width, height);
 		break;
 	case 'a': // translate left
-		{
-			glm::vec3 axisX = glm::cross(axisY, axisZ);
-			origin -= speed * axisX;
-		}
+	{
+		glm::vec3 axisX = glm::cross(axisY, axisZ);
+		origin -= speed * axisX;
+	}
 		reshape(width, height);
 		break;
 	case 'd': // translate right
-		{
-			glm::vec3 axisX = glm::cross(axisY, axisZ);
-			origin += speed * axisX;
-		}
+	{
+		glm::vec3 axisX = glm::cross(axisY, axisZ);
+		origin += speed * axisX;
+	}
 		reshape(width, height);
 		break;
 	case 'q': // quit
 		exit(0);
+		break;
+	case 'z': // opengl
+	{
+		auto filename = get_filename("images/opengl_");
+		export_opengl_image(filename, width, height);
+	}
+		break;
+	case 'x': // normal mode
+	{
+		auto filename = get_filename("images/raytraced_");
+		glm::vec3 camera =  origin + dist * axisZ;
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+	}
+		break;
+	case 'c': // soft shadows
+	{
+		auto filename = get_filename("images/soft_shadows_");
+		glm::vec3 camera =  origin + dist * axisZ;
+		export_soft_shadows_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+	}
+		break;
+	case 'v': // depth of field
+	{
+		auto filename = get_filename("images/depth_of_field_");
+		glm::vec3 camera =  origin + dist * axisZ;
+		export_depth_of_field_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+	}
+		break;
+	case 'b': // motion blur
+	{
+		auto filename = get_filename("images/motion_blur_");
+		glm::vec3 camera =  origin + dist * axisZ;
+		export_motion_blur_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+	}
+		break;
+	case 'n': // bump mapping
+	{
+		auto filename = get_filename("images/bump_mapping_");
+		glm::vec3 camera =  origin + dist * axisZ;
+		export_bump_mapping_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+	}
 		break;
 	}
 	glutPostRedisplay();
@@ -232,6 +292,8 @@ void motionCB(int x, int y)
 
 int main(int argc, char** argv)
 {
+	if (argc >= 2) num_threads = atoi(argv[1]);
+
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DEPTH | GLUT_DOUBLE);
 	glutInitWindowSize(width, height);

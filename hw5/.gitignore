@@ -1,0 +1,8 @@
+*
+!.gitignore
+!*.cpp
+!*.h
+!Makefile
+!images
+!models
+!textures

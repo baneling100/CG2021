@@ -12,6 +12,7 @@
 #include <glm/gtx/intersect.hpp>
 
 #include "material.h"
+#include "utils.h"
 
 using Point = std::tuple<glm::vec3, glm::vec3, glm::vec2>;
 using Points = std::vector<Point>;
@@ -30,6 +31,13 @@ struct PointCompare {
 	{ return a.x < b.x || (a.x == b.x && a.y < b.y) || (a.x == b.x && a.y == b.y && a.z < b.z); }
 };
 
+struct OctreeNode {
+	glm::vec3 minB, maxB;
+	int size;
+	int *indices;
+	OctreeNode *nodes[8];
+};
+
 class Model
 {
   public:
@@ -37,7 +45,8 @@ class Model
 
 	virtual Model &parse() = 0;
 	void collect(Points &global_points, Faces &opaque_faces, Faces &trans_faces, Images &images);
-	virtual std::tuple<float, Point, Material *, unsigned int> nearest_intersect(glm::vec3 &p0, glm::vec3 &u);
+	virtual std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u);
+	virtual std::pair<float, float> shadow_attenuation(glm::vec3 &p0, glm::vec3 &u);
 
   protected:
 	Points local_points;
@@ -45,6 +54,7 @@ class Model
 	int offset, width, height;
 	unsigned int texture = 0;
 	unsigned char *image;
+	OctreeNode *top;
 };
 
 class PokeBall : public Model
@@ -95,13 +105,14 @@ class Table : public Model
 	Model &parse() override;
 };
 
-class GlassSphere : public Model
+class MirrorSphere : public Model
 {
   public:
-	GlassSphere() = default;
+	MirrorSphere() = default;
 
 	Model &parse() override;
-	std::tuple<float, Point, Material *, unsigned int> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::pair<float, float> shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
 };
 
 class WoodenSphere : public Model
@@ -110,7 +121,8 @@ class WoodenSphere : public Model
 	WoodenSphere() = default;
 
 	Model &parse() override;
-	std::tuple<float, Point, Material *, unsigned int> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::pair<float, float> shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
 };
 
 class Dice : public Model
@@ -127,7 +139,7 @@ class Background : public Model
 	Background() = default;
 
 	Model &parse() override;
-	std::tuple<float, Point, Material *, unsigned int> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
 };
 
 #endif

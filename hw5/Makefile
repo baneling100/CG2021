@@ -1,9 +1,9 @@
 CC = g++
 TARGET = render
-OBJECTS = main.o material.o light.o model.o ray_tracing.o
+OBJECTS = main.o material.o light.o model.o export.o ray_tracing.o utils.o
 
 CXXFLAGS = -std=c++17 -O3 -Wall -g
-LDFLAGS = -lm -ldl -lglut -lGL -lGLU
+LDFLAGS = -lm -ldl -lglut -lGL -lGLU -pthread
 
 all: $(TARGET)
 
@@ -16,4 +16,4 @@ clean:
 	rm $(TARGET) $(OBJECTS)
 
 run: $(TARGET)
-	./$^
+	./$^ 4
