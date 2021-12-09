@@ -11,7 +11,7 @@
 
 static unsigned int width = 1280, height = 720;
 static bool mouseRotatePressed = false, mouseZoomPressed = false, fullScreen = false;
-static float dist = 1000.0f, fovy = 45.0f, angle_speed = 0.003f, speed = 10.0f;
+static float dist = 10.0f, fovy = 45.0f, angle_speed = 0.003f, speed = 0.1f;
 static int lastX = 0, lastY = 0, freq = 32, num_threads = 1;
 static glm::vec3 axisZ = glm::vec3(0.0f, 0.0f, 1.0f); // orientation
 static glm::vec3 axisY = glm::vec3(0.0f, 1.0f, 0.0f); // view-up vector
@@ -20,15 +20,15 @@ static glm::vec3 origin = glm::vec3(0.0f, 0.0f, 0.0f);
 Light *lights[] = {new Light(GL_LIGHT0, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
-										(GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f}),
+										(GLfloat[4]){-1.0f, 1.0f, 1.0f, 0.0f}),
 				   new Light(GL_LIGHT1, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
-										(GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f}),
+										(GLfloat[4]){-1.0f, 1.0f, 1.0f, 0.0f}),
 				   new Light(GL_LIGHT2, (GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
 										(GLfloat[4]){1.0f, 1.0f, 1.0f, 1.0f},
-										(GLfloat[4]){-1.0f, 0.3f, 1.0f, 0.0f})};
+										(GLfloat[4]){-1.0f, 1.0f, 1.0f, 0.0f})};
 Model *models[] = {new Background(), new WoodenSphere(), new Dice(), new MirrorSphere(), new Table(),
 				   new PokeBall(), new UltraBall(), new NetBall(), new TimerBall(), new MasterBall()};
 Points points; Faces opaque_faces, trans_faces; Images images;
@@ -126,7 +126,7 @@ void reshape(int w, int h)
 	glViewport(0, 0, w, h);
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	gluPerspective(fovy, (float)width / height, 0.1f, 3000.0f);
+	gluPerspective(fovy, (float)width / height, 0.001f, 30.0f);
 	gluLookAt(camera.x, camera.y, camera.z, origin.x, origin.y, origin.z, axisY.x, axisY.y, axisY.z);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
@@ -159,7 +159,7 @@ void keyboardCB(unsigned char keyPressed, int x, int y)
 		break;
 	case 'e': // dolly in
 		dist -= speed;
-		if (dist < 0.1f) dist = 0.1f;
+		if (dist < 0.001f) dist = 0.001f;
 		reshape(width, height);
 		break;
 	case 'r': // dolly out
@@ -201,35 +201,35 @@ void keyboardCB(unsigned char keyPressed, int x, int y)
 	{
 		auto filename = get_filename("images/raytraced_");
 		glm::vec3 camera =  origin + dist * axisZ;
-		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, DEFAULT);
 	}
 		break;
 	case 'c': // soft shadows
 	{
 		auto filename = get_filename("images/soft_shadows_");
 		glm::vec3 camera =  origin + dist * axisZ;
-		export_soft_shadows_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, SOFT_SHADOWS);
 	}
 		break;
 	case 'v': // depth of field
 	{
 		auto filename = get_filename("images/depth_of_field_");
 		glm::vec3 camera =  origin + dist * axisZ;
-		export_depth_of_field_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, DEPTH_OF_FIELD);
 	}
 		break;
 	case 'b': // motion blur
 	{
 		auto filename = get_filename("images/motion_blur_");
 		glm::vec3 camera =  origin + dist * axisZ;
-		export_motion_blur_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, MOTION_BLUR);
 	}
 		break;
 	case 'n': // bump mapping
 	{
 		auto filename = get_filename("images/bump_mapping_");
 		glm::vec3 camera =  origin + dist * axisZ;
-		export_bump_mapping_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, BUMP_MAPPING);
 	}
 		break;
 	}

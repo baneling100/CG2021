@@ -46,7 +46,7 @@ class Model
 	virtual Model &parse() = 0;
 	void collect(Points &global_points, Faces &opaque_faces, Faces &trans_faces, Images &images);
 	virtual std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u);
-	virtual std::pair<float, float> shadow_attenuation(glm::vec3 &p0, glm::vec3 &u);
+	virtual float shadow_attenuation(glm::vec3 &p0, glm::vec3 &u);
 
   protected:
 	Points local_points;
@@ -112,7 +112,7 @@ class MirrorSphere : public Model
 
 	Model &parse() override;
 	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
-	std::pair<float, float> shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
+	float shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
 };
 
 class WoodenSphere : public Model
@@ -122,7 +122,7 @@ class WoodenSphere : public Model
 
 	Model &parse() override;
 	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
-	std::pair<float, float> shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
+	float shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
 };
 
 class Dice : public Model

@@ -1,4 +1,4 @@
-#include "ray_tracing.h"
+#include "ray_trace.h"
 
 static glm::vec3 get_texture_color(glm::vec2 &t, unsigned int tex, Images &images)
 {
@@ -27,7 +27,8 @@ static glm::vec3 get_texture_color(glm::vec2 &t, unsigned int tex, Images &image
 	return glm::vec3(1.0f, 1.0f, 1.0f);
 }
 
-glm::vec3 ray_trace(glm::vec3 &p0, glm::vec3 &u, Light *lights[], Model *models[], Images &images, int depth, bool is_air)
+glm::vec3 ray_trace(glm::vec3 &p0, glm::vec3 &u, Light *lights[], Model *models[], Images &images,
+					bool is_air, int depth, float intensity, Option option)
 {
 	float min_d = 999999999.0f;
 	Point pnt;
@@ -52,7 +53,8 @@ glm::vec3 ray_trace(glm::vec3 &p0, glm::vec3 &u, Light *lights[], Model *models[
 		return get_texture_color(t, ti, images);
 	}
 
-	auto &[p, N, t] = pnt;
+	auto [p, N, t] = pnt;
+	N = glm::normalize(N);
 	glm::vec3 texture_color = get_texture_color(t, tex, images);
 	glm::vec3 Ka = glm::vec3(mat->ambient[0], mat->ambient[1], mat->ambient[2]);
 	glm::vec3 Kd = glm::vec3(mat->diffuse[0], mat->diffuse[1], mat->diffuse[2]);
@@ -62,32 +64,31 @@ glm::vec3 ray_trace(glm::vec3 &p0, glm::vec3 &u, Light *lights[], Model *models[
 	glm::vec3 V = -u;
 	glm::vec3 I = glm::vec3(0.0f, 0.0f, 0.0f);
 	if (glm::dot(V, N) < 0.0f) N = -N;
-	if (alpha * (1.0f - reflect) > 0.0f)
+	if (intensity * alpha > 0.01f)
 		for (int i = 0; i < 3; i++) {
 			glm::vec3 L = glm::normalize(glm::vec3(lights[i]->position[0], lights[i]->position[1], lights[i]->position[2]));
-			glm::vec3 R = 2.0f * glm::dot(L, N) * N - L;
+			glm::vec3 R = glm::normalize(2.0f * glm::dot(L, N) * N - L);
 			glm::vec3 Ia = glm::vec3(lights[i]->ambient[0], lights[i]->ambient[1], lights[i]->ambient[2]);
 			glm::vec3 Id = glm::vec3(lights[i]->diffuse[0], lights[i]->diffuse[1], lights[i]->diffuse[2]);
 			glm::vec3 Is = glm::vec3(lights[i]->specular[0], lights[i]->specular[1], lights[i]->specular[2]);
-			float Sd = 1.0f, Ss = 1.0f;
+			float SA = 1.0f;
 			for (int j = 1; j < 10; j++) {
-				auto [Sdj, Ssj] = models[j]->shadow_attenuation(p, L);
-				Sd *= Sdj;
-				Ss *= Ssj;
+				SA *= models[j]->shadow_attenuation(p, L);
+				if (SA == 0.0f) break;
 			}
-			I += alpha * (1.0f - reflect) *
-				 (Ka * Ia + Sd * Kd * Id * std::max(glm::dot(N, L), 0.0f)) * texture_color +
-				  Ss * Ks * Is * std::pow(std::max(glm::dot(V, R), 0.0f), n);
+			I += ((Ka * Ia + (1.0f - reflect) * SA * Kd * Id * std::max(glm::dot(N, L), 0.0f)) * texture_color +
+				   SA * Ks * Is * std::pow(std::max(glm::dot(V, R), 0.0f), n)) * intensity * alpha;
 		}
-	if (alpha * reflect > 0.0f && depth < 10) {
-		glm::vec3 dir = 2.0f * glm::dot(V, N) * N - V;
-		I += alpha * reflect * ray_trace(p, dir, lights, models, images, depth + 1, is_air);
+	if (intensity * alpha * reflect > 0.01f && depth < 10) {
+		glm::vec3 dir = glm::normalize(2.0f * glm::dot(V, N) * N - V);
+		I += ray_trace(p, dir, lights, models, images, is_air, depth + 1, intensity * alpha * reflect, option);
 	}
-	if (alpha < 1.0f && depth < 10) {
+	if (intensity * (1.0f - alpha) > 0.01f && depth < 10) {
 		float cosi = glm::dot(V, N), ref_coef = is_air ? 0.666f : 1.5f;
 		float cosr = std::sqrt(1 - ref_coef * ref_coef * (1 - cosi * cosi));
-		glm::vec3 dir = (ref_coef * cosi - cosr) * N - ref_coef * V;
-		I += (1.0f - alpha) * ray_trace(p, dir, lights, models, images, depth + 1, !is_air);
+		glm::vec3 dir = glm::normalize((ref_coef * cosi - cosr) * N - ref_coef * V);
+		I += ray_trace(p, dir, lights, models, images, !is_air, depth + 1, intensity * (1.0f - alpha), option);
 	}
-	return glm::vec3(std::min(I.x, 1.0f), std::min(I.y, 1.0f), std::min(I.z, 1.0f));
+
+	return I;
 }

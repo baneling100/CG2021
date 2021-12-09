@@ -2,7 +2,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-static void parse_stl(std::string &&file_path, Points &points, Faces &faces, Material *material)
+static void parse_stl(std::string &&file_path, Points &points, Faces &faces, Material *material, bool angulated = false)
 {
 	FILE *fp = fopen(file_path.c_str(), "rb");
 	fseek(fp, 0, SEEK_END);
@@ -35,11 +35,8 @@ static void parse_stl(std::string &&file_path, Points &points, Faces &faces, Mat
 								 ((ParsingMask *)(buf_ptr + 44))->f);
 		buf_ptr += 50;
 		
-		if (glm::dot(n, n) == 0.0f)
-			n = -glm::cross(p2 - p1, p3 - p1);
-		
 		int idx1, idx2, idx3;
-		if (point_map.find(p1) == point_map.end()) {
+		if (angulated || point_map.find(p1) == point_map.end()) {
 			idx1 = cnt++;
 			point_map[p1] = idx1;
 			points.emplace_back(p1, n, glm::vec2(0.0f, 0.0f));
@@ -49,7 +46,7 @@ static void parse_stl(std::string &&file_path, Points &points, Faces &faces, Mat
 			auto &[p0, n0, t0] = points[idx1];
 			n0 += n;
 		}
-		if (point_map.find(p2) == point_map.end()) {
+		if (angulated || point_map.find(p2) == point_map.end()) {
 			idx2 = cnt++;
 			point_map[p2] = idx2;
 			points.emplace_back(p2, n, glm::vec2(0.0f, 0.0f));
@@ -59,7 +56,7 @@ static void parse_stl(std::string &&file_path, Points &points, Faces &faces, Mat
 			auto &[p0, n0, t0] = points[idx2];
 			n0 += n;
 		}
-		if (point_map.find(p3) == point_map.end()) {
+		if (angulated || point_map.find(p3) == point_map.end()) {
 			idx3 = cnt++;
 			point_map[p3] = idx3;
 			points.emplace_back(p3, n, glm::vec2(0.0f, 0.0f));
@@ -90,16 +87,12 @@ static void collect_part(Points &to_points, Faces &to_faces, Points &from_points
 
 static bool ray_cube_intersect(glm::vec3 &p0, glm::vec3 &u, glm::vec3 &minB, glm::vec3 &maxB)
 {
-	float invX = u.x == 0.0f ? 999999999.0f : 1.0f / u.x;
-	float invY = u.y == 0.0f ? 999999999.0f : 1.0f / u.y;
-	float invZ = u.z == 0.0f ? 999999999.0f : 1.0f / u.z;
-
-	float tx1 = (minB.x - p0.x) * invX;
-	float tx2 = (maxB.x - p0.x) * invX;
-	float ty1 = (minB.y - p0.y) * invY;
-	float ty2 = (maxB.y - p0.y) * invY;
-	float tz1 = (minB.z - p0.z) * invZ;
-	float tz2 = (maxB.z - p0.z) * invZ;
+	float tx1 = (minB.x - p0.x) / u.x;
+	float tx2 = (maxB.x - p0.x) / u.x;
+	float ty1 = (minB.y - p0.y) / u.y;
+	float ty2 = (maxB.y - p0.y) / u.y;
+	float tz1 = (minB.z - p0.z) / u.z;
+	float tz2 = (maxB.z - p0.z) / u.z;
 
 	float tmin = std::max(std::max(std::min(tx1, tx2), std::min(ty1, ty2)), std::min(tz1, tz2));
 	float tmax = std::min(std::min(std::max(tx1, tx2), std::max(ty1, ty2)), std::max(tz1, tz2));
@@ -127,7 +120,7 @@ static void collect_sub_indices(Points &points, Faces &faces, std::vector<int> &
 
 static void make_octree(OctreeNode *now, Points &points, Faces &faces, std::vector<int> &indices, int depth)
 {
-	if (indices.size() <= 32 || depth > 10) {
+	if (indices.size() <= 12 || depth > 6) {
 		now->size = indices.size();
 		now->indices = (int *)malloc(now->size * sizeof(int));
 		for (int i = 0; i < now->size; i++)
@@ -188,21 +181,20 @@ recursive_nearest_intersect(Points &points, Faces &faces, glm::vec3 &p0, glm::ve
 
 	if (now->size) {
 		for (int i = 0; i < now->size; i++) {
-			auto &[p1, p2, p3, m, t] = faces[now->indices[i]];
+			auto &[p1, p2, p3, mi, ti] = faces[now->indices[i]];
 			auto &[v1, n1, t1] = points[p1];
 			auto &[v2, n2, t2] = points[p2];
 			auto &[v3, n3, t3] = points[p3];
 			glm::vec2 bary; float dist;
-			if (glm::intersectRayTriangle(p0, u, v1, v2, v3, bary, dist) && dist >= 1e-2f) {
-				if (min_dist > dist) {
-					is_valid = true;
-					min_dist = dist;
-					p = std::make_tuple(v1 + bary.x * (v2 - v1) + bary.y * (v3 - v1),
-										n1 + bary.x * (n2 - n1) + bary.y * (n3 - n1),
-										t1 + bary.x * (t2 - t1) + bary.y * (t3 - t1));
-					mat = m;
-					tex = t;
-				}
+			if (glm::intersectRayTriangle(p0, u, v1, v2, v3, bary, dist) && dist >= 0.001f && min_dist > dist) {
+				is_valid = true;
+				min_dist = dist;
+				glm::vec3 v = (1.0f - bary.x - bary.y) * v1 + bary.x * v2 + bary.y * v3;
+				glm::vec3 n = (1.0f - bary.x - bary.y) * n1 + bary.x * n2 + bary.y * n3;
+				glm::vec2 t = (1.0f - bary.x - bary.y) * t1 + bary.x * t2 + bary.y * t3;
+				p = std::make_tuple(v, n, t);
+				mat = mi;
+				tex = ti;
 			}
 		}
 		return std::make_tuple(min_dist, p, mat, tex, is_valid);
@@ -229,22 +221,39 @@ std::tuple<float, Point, Material *, unsigned int, bool> Model::nearest_intersec
 	return std::make_tuple(999999999.0f, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0, false);
 }
 
-std::pair<float, float> Model::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
+static float recursive_shadow_attenuation(Points &points, Faces &faces,
+														glm::vec3 &p0, glm::vec3 &u, OctreeNode *now)
 {
-	float Ad = 1.0f, As = 1.0f;
+	float SA = 1.0f;
 
-	for (auto &[p1, p2, p3, m, t] : local_faces) {
-		auto &[v1, n1, t1] = local_points[p1];
-		auto &[v2, n2, t2] = local_points[p2];
-		auto &[v3, n3, t3] = local_points[p3];
-
-		glm::vec2 bary; float dist;
-		if (glm::intersectRayTriangle(p0, u, v1, v2, v3, bary, dist) && dist >= 1e-2f) {
-			Ad *= 1.0f - m->diffuse[3];
-			As *= 1.0f - m->specular[3];
+	if (now->size) {
+		for (int i = 0; i < now->size; i++) {
+			auto &[p1, p2, p3, mi, ti] = faces[now->indices[i]];
+			auto &[v1, n1, t1] = points[p1];
+			auto &[v2, n2, t2] = points[p2];
+			auto &[v3, n3, t3] = points[p3];
+			glm::vec2 bary; float dist;
+			if (glm::intersectRayTriangle(p0, u, v1, v2, v3, bary, dist) && dist >= 0.001f) {
+				SA *= 1.0f - mi->ambient[3];
+				if (SA == 0.0f) return 0.0f;
+			}
 		}
+		return SA;
 	}
-	return std::make_pair(Ad, As);
+
+	for (int i = 0; i < 8; i++)
+		if (now->nodes[i] && ray_cube_intersect(p0, u, now->nodes[i]->minB, now->nodes[i]->maxB)) {
+			SA *= recursive_shadow_attenuation(points, faces, p0, u, now->nodes[i]);
+			if (SA == 0.0f) return 0.0f;
+		}
+	return SA;
+}
+
+float Model::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
+{
+	if (ray_cube_intersect(p0, u, top->minB, top->maxB))
+		return recursive_shadow_attenuation(local_points, local_faces, p0, u, top);
+	return 1.0f;
 }
 
 Model &PokeBall::parse()
@@ -254,7 +263,7 @@ Model &PokeBall::parse()
 	Points button_points, inner_shell_points, red_lid_points, white_lid_points;
 	Faces button_faces, inner_shell_faces, red_lid_faces, white_lid_faces;
 
-	parse_stl("models/pokeball/button.stl", button_points, button_faces, &white_plastic);
+	parse_stl("models/pokeball/button.stl", button_points, button_faces, &glass);
 	parse_stl("models/pokeball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/pokeball/red_lid.stl", red_lid_points, red_lid_faces, &red_plastic);
 	parse_stl("models/pokeball/white_lid.stl", white_lid_points, white_lid_faces, &glass);
@@ -275,6 +284,8 @@ Model &PokeBall::parse()
 	collect_part(local_points, local_faces, red_lid_points, red_lid_faces);
 	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
 	
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
+
 	top = (OctreeNode *)malloc(sizeof(OctreeNode));
 	top->minB = glm::vec3(999999999.0f, 999999999.0f, 999999999.0f);
 	top->maxB = glm::vec3(-999999999.0f, -999999999.0f, -999999999.0f);
@@ -300,7 +311,7 @@ Model &MasterBall::parse()
 	Faces button_faces, inner_shell_faces, lid_base_faces, white_lid_faces, m_letter_faces,
 		  bump_1_faces, bump_2_faces;
 		  
-	parse_stl("models/masterball/button.stl", button_points, button_faces, &white_plastic);
+	parse_stl("models/masterball/button.stl", button_points, button_faces, &glass);
 	parse_stl("models/masterball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/masterball/lid_base.stl", lid_base_points, lid_base_faces, &purple_plastic);
 	parse_stl("models/masterball/white_lid.stl", white_lid_points, white_lid_faces, &glass);
@@ -334,6 +345,8 @@ Model &MasterBall::parse()
 	collect_part(local_points, local_faces, m_letter_points, m_letter_faces);
 	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
 
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
+
 	top = (OctreeNode *)malloc(sizeof(OctreeNode));
 	top->minB = glm::vec3(999999999.0f, 999999999.0f, 999999999.0f);
 	top->maxB = glm::vec3(-999999999.0f, -999999999.0f, -999999999.0f);
@@ -357,7 +370,7 @@ Model &NetBall::parse()
 	Points button_points, inner_shell_points, lid_base_points, net_points, white_lid_points;
 	Faces button_faces, inner_shell_faces, lid_base_faces, net_faces, white_lid_faces;
 
-	parse_stl("models/netball/button.stl", button_points, button_faces, &white_plastic);
+	parse_stl("models/netball/button.stl", button_points, button_faces, &glass);
 	parse_stl("models/netball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/netball/lid_base.stl", lid_base_points, lid_base_faces, &cyan_plastic);
 	parse_stl("models/netball/white_lid.stl", white_lid_points, white_lid_faces, &glass);
@@ -380,6 +393,8 @@ Model &NetBall::parse()
 	collect_part(local_points, local_faces, net_points, net_faces);
 	collect_part(local_points, local_faces, lid_base_points, lid_base_faces);
 	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
+
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
 
 	top = (OctreeNode *)malloc(sizeof(OctreeNode));
 	top->minB = glm::vec3(999999999.0f, 999999999.0f, 999999999.0f);
@@ -406,7 +421,7 @@ Model &TimerBall::parse()
 	Faces button_faces, inner_shell_faces, lid_black_faces, lid_bottom_faces, lid_top_faces,
 		  stripes_lower_faces, stripes_upper_faces, top_stripe_faces;
 
-	parse_stl("models/timerball/button.stl", button_points, button_faces, &white_plastic);
+	parse_stl("models/timerball/button.stl", button_points, button_faces, &glass);
 	parse_stl("models/timerball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/timerball/lid_top.stl", lid_top_points, lid_top_faces, &white_plastic);
 	parse_stl("models/timerball/lid_bottom.stl", lid_bottom_points, lid_bottom_faces, &glass);
@@ -436,6 +451,8 @@ Model &TimerBall::parse()
 	collect_part(local_points, local_faces, stripes_upper_points, stripes_upper_faces);
 	collect_part(local_points, local_faces, top_stripe_points, top_stripe_faces);
 
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
+
 	top = (OctreeNode *)malloc(sizeof(OctreeNode));
 	top->minB = glm::vec3(999999999.0f, 999999999.0f, 999999999.0f);
 	top->maxB = glm::vec3(-999999999.0f, -999999999.0f, -999999999.0f);
@@ -459,7 +476,7 @@ Model &UltraBall::parse()
 	Points button_points, inner_shell_points, lid_black_points, lid_yellow_points, white_lid_points;
 	Faces button_faces, inner_shell_faces, lid_black_faces, lid_yellow_faces, white_lid_faces;
 
-	parse_stl("models/ultraball/button.stl", button_points, button_faces, &white_plastic);
+	parse_stl("models/ultraball/button.stl", button_points, button_faces, &glass);
 	parse_stl("models/ultraball/inner_shell.stl", inner_shell_points, inner_shell_faces, &black_plastic);
 	parse_stl("models/ultraball/lid_black.stl", lid_black_points, lid_black_faces, &black_plastic);
 	parse_stl("models/ultraball/white_lid.stl", white_lid_points, white_lid_faces, &glass);
@@ -478,6 +495,8 @@ Model &UltraBall::parse()
 	collect_part(local_points, local_faces, lid_black_points, lid_black_faces);
 	collect_part(local_points, local_faces, lid_yellow_points, lid_yellow_faces);
 	collect_part(local_points, local_faces, white_lid_points, white_lid_faces);
+
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
 
 	top = (OctreeNode *)malloc(sizeof(OctreeNode));
 	top->minB = glm::vec3(999999999.0f, 999999999.0f, 999999999.0f);
@@ -499,12 +518,11 @@ Model &Table::parse()
 {
 	local_points.clear(); local_faces.clear();
 
-	parse_stl("models/table.stl", local_points, local_faces, &green_plastic);
+	parse_stl("models/table.stl", local_points, local_faces, &green_plastic, true);
 
-	for (auto &[p, n, t] : local_points) p = 7500.0f * p + glm::vec3(0.0f, -250.0f, 0.0f);
+	for (auto &[p, n, t] : local_points) p = 7500.0f * p + glm::vec3(-50.0f, -250.0f, 0.0f);
 
-	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PIf32 / 3.0f, glm::vec3(0.0f, 1.0f, 0.0f));
-	for (auto &[p, n, t] : local_points) { p = quat * p; n = quat * n; }
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
 
 	top = (OctreeNode *)malloc(sizeof(OctreeNode));
 	top->minB = glm::vec3(999999999.0f, 999999999.0f, 999999999.0f);
@@ -574,6 +592,7 @@ Model &MirrorSphere::parse()
 		}
 
 	for (auto &[p, n, t] : local_points) p = 40.0f * p + glm::vec3(-7.0f, -51.0f, 85.4f);
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
 
 	return *this;
 }
@@ -582,21 +601,18 @@ std::tuple<float, Point, Material *, unsigned int, bool> MirrorSphere::nearest_i
 {
 	glm::vec3 p, n;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(-7.0f, -51.0f, 85.4f), 40.0f, p, n) && glm::distance(p0, p) >= 1e-2f)
+	if (glm::intersectRaySphere(p0, u, glm::vec3(-0.07f, -0.51f, 0.854f), 0.4f, p, n) && glm::distance(p0, p) >= 0.001f)
 		return std::make_tuple(glm::distance(p0, p), std::make_tuple(p, n, glm::vec2(0.0f, 0.0f)), &mirror, 0, true);
 	return std::make_tuple(999999999.0f, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0, false);
 }
 
-std::pair<float, float> MirrorSphere::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
+float MirrorSphere::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
 {
 	float dist;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(-7.0f, -51.0f, 85.4f), 1600.0f, dist) && dist >= 1e-2f) {
-		float Ad = 1.0f - mirror.diffuse[3];
-		float As = 1.0f - mirror.specular[3];
-		return std::make_pair(Ad * Ad, As * As);
-	}
-	return std::make_pair(1.0f, 1.0f);
+	if (glm::intersectRaySphere(p0, u, glm::vec3(-0.07f, -0.51f, 0.854f), 0.16f, dist) && dist >= 0.001f)
+		return 0.0f;
+	return 1.0f;
 }
 
 Model &WoodenSphere::parse()
@@ -665,6 +681,7 @@ Model &WoodenSphere::parse()
 		}
 
 	for (auto &[p, n, t] : local_points) p = 40.0f * p + glm::vec3(93.7f, -51.0f, -87.7f);
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
 
 	return *this;
 }
@@ -673,8 +690,8 @@ std::tuple<float, Point, Material *, unsigned int, bool> WoodenSphere::nearest_i
 {
 	glm::vec3 p, n;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(93.7f, -51.0f, -87.7f), 40.0f, p, n) && glm::distance(p0, p) >= 1e-2f) {
-		glm::vec3 q = (p - glm::vec3(93.7f, -51.0f, -87.7f)) / 40.0f;
+	if (glm::intersectRaySphere(p0, u, glm::vec3(0.937f, -0.51f, -0.877f), 0.4f, p, n) && glm::distance(p0, p) >= 0.001f) {
+		glm::vec3 q = glm::normalize(p - glm::vec3(0.937f, -0.51f, -0.877f));
 		float cos_theta = q.y;
 		float theta = std::acos(cos_theta);
 		float sin_theta = std::sqrt(1 - cos_theta * cos_theta);
@@ -686,13 +703,13 @@ std::tuple<float, Point, Material *, unsigned int, bool> WoodenSphere::nearest_i
 	return std::make_tuple(999999999.0f, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0, false);
 }
 
-std::pair<float, float> WoodenSphere::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
+float WoodenSphere::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
 {
 	float dist;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(93.7f, -51.0f, -87.7f), 1600.0f, dist) && dist >= 1e-2f)
-		return std::make_pair(0.0f, 0.0f);
-	return std::make_pair(1.0f, 1.0f);
+	if (glm::intersectRaySphere(p0, u, glm::vec3(0.937f, -0.51f, -0.877f), 0.16f, dist) && dist >= 0.001f)
+		return 0.0f;
+	return 1.0f;
 }
 
 Model &Dice::parse()
@@ -746,12 +763,13 @@ Model &Dice::parse()
 	local_faces.emplace_back(20, 21, 22, &default_material, texture);
 	local_faces.emplace_back(22, 23, 20, &default_material, texture);
 
-	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PI_4f32, glm::vec3(1.0f, 0.0f, 0.0f));
-	quat = glm::rotate(quat, M_PI_4f32, glm::vec3(0.0f, 0.0f, 1.0f));
+	glm::quat quat = glm::rotate(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), M_PI_4f32, glm::vec3(1.0f, 0.0f, 1.0f));
 	for (auto &[p, n, t] : local_points) {
 		p = 30.0f * (quat * p) + glm::vec3(-107.0f, -39.0f, -87.7f);
 		n = quat * n;
 	}
+
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
 
 	top = (OctreeNode *)malloc(sizeof(OctreeNode));
 	top->minB = glm::vec3(999999999.0f, 999999999.0f, 999999999.0f);
@@ -835,6 +853,7 @@ Model &Background::parse()
 		}
 
 	for (auto &[p, n, t] : local_points) p = 1250.0f * p;
+	for (auto &[p, n, t] : local_points) p /= 100.0f;
 
 	return *this;
 }
@@ -843,8 +862,8 @@ std::tuple<float, Point, Material *, unsigned int, bool> Background::nearest_int
 {
 	glm::vec3 p, n;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(0.0f, 0.0f, 0.0f), 1250.0f, p, n) && glm::distance(p0, p) >= 1e-2f) {
-		glm::vec3 q = p / 1250.0f;
+	if (glm::intersectRaySphere(p0, u, glm::vec3(0.0f, 0.0f, 0.0f), 12.5f, p, n) && glm::distance(p0, p) >= 0.001f) {
+		glm::vec3 q = glm::normalize(p);
 		float cos_theta = q.y;
 		float theta = std::acos(cos_theta);
 		float sin_theta = std::sqrt(1 - cos_theta * cos_theta);
