@@ -21,6 +21,14 @@ using Faces = std::vector<Face>;
 using Image = std::tuple<int, int, unsigned char *>;
 using Images = std::vector<Image>;
 
+enum Option {
+	DEFAULT,
+	SOFT_SHADOWS,
+	DEPTH_OF_FIELD,
+	MOTION_BLUR,
+	BUMP_MAPPING
+};
+
 union ParsingMask {
 		float f;
 		unsigned int i;
@@ -45,8 +53,9 @@ class Model
 
 	virtual Model &parse() = 0;
 	void collect(Points &global_points, Faces &opaque_faces, Faces &trans_faces, Images &images);
-	virtual std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u);
+	virtual std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option);
 	virtual float shadow_attenuation(glm::vec3 &p0, glm::vec3 &u);
+	void set_motion(glm::vec3 m);
 
   protected:
 	Points local_points;
@@ -55,6 +64,7 @@ class Model
 	unsigned int texture = 0;
 	unsigned char *image;
 	OctreeNode *top;
+	glm::vec3 motion = glm::vec3(0.0f, 0.0f, 0.0f);
 };
 
 class PokeBall : public Model
@@ -111,7 +121,7 @@ class MirrorSphere : public Model
 	MirrorSphere() = default;
 
 	Model &parse() override;
-	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option) override;
 	float shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
 };
 
@@ -121,7 +131,7 @@ class WoodenSphere : public Model
 	WoodenSphere() = default;
 
 	Model &parse() override;
-	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option) override;
 	float shadow_attenuation(glm::vec3 &p0, glm::vec3 &u) override;
 };
 
@@ -139,7 +149,7 @@ class Background : public Model
 	Background() = default;
 
 	Model &parse() override;
-	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u) override;
+	std::tuple<float, Point, Material *, unsigned int, bool> nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option) override;
 };
 
 #endif

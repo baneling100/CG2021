@@ -37,7 +37,7 @@ glm::vec3 ray_trace(glm::vec3 &p0, glm::vec3 &u, Light *lights[], Model *models[
 	bool is_background = true;
 
 	for (int i = 1; i < 10; i++) {
-		auto [di, pi, mi, ti, b] = models[i]->nearest_intersect(p0, u);
+		auto [di, pi, mi, ti, b] = models[i]->nearest_intersect(p0, u, option);
 		if (b && min_d > di) {
 			is_background = false;
 			min_d = di;
@@ -48,7 +48,7 @@ glm::vec3 ray_trace(glm::vec3 &p0, glm::vec3 &u, Light *lights[], Model *models[
 	}
 
 	if (is_background) {
-		auto [di, pi, mi, ti, b] = models[0]->nearest_intersect(p0, u);
+		auto [di, pi, mi, ti, b] = models[0]->nearest_intersect(p0, u, option);
 		auto [p, N, t] = pi;
 		return get_texture_color(t, ti, images);
 	}
@@ -66,15 +66,33 @@ glm::vec3 ray_trace(glm::vec3 &p0, glm::vec3 &u, Light *lights[], Model *models[
 	if (glm::dot(V, N) < 0.0f) N = -N;
 	if (intensity * alpha > 0.01f)
 		for (int i = 0; i < 3; i++) {
+			float SA = 0.0f;
 			glm::vec3 L = glm::normalize(glm::vec3(lights[i]->position[0], lights[i]->position[1], lights[i]->position[2]));
 			glm::vec3 R = glm::normalize(2.0f * glm::dot(L, N) * N - L);
 			glm::vec3 Ia = glm::vec3(lights[i]->ambient[0], lights[i]->ambient[1], lights[i]->ambient[2]);
 			glm::vec3 Id = glm::vec3(lights[i]->diffuse[0], lights[i]->diffuse[1], lights[i]->diffuse[2]);
 			glm::vec3 Is = glm::vec3(lights[i]->specular[0], lights[i]->specular[1], lights[i]->specular[2]);
-			float SA = 1.0f;
-			for (int j = 1; j < 10; j++) {
-				SA *= models[j]->shadow_attenuation(p, L);
-				if (SA == 0.0f) break;
+			if (option == SOFT_SHADOWS) {
+				for (int k = 0; k < 8; k++) {
+					float SAk = 1.0f;
+					float r = ((float)std::rand() / RAND_MAX) / 50.f;
+					float theta = ((float)std::rand() / RAND_MAX) * 2.0f * M_PIf32;
+					glm::vec3 Lk = glm::normalize(L + r * glm::normalize(glm::vec3(1, 1, 0)) * std::cos(theta) +
+													r * glm::normalize(glm::vec3(1, -1, 2)) * std::sin(theta));
+					for (int j = 1; j < 10; j++) {
+						SAk *= models[j]->shadow_attenuation(p, Lk);
+						if (SAk == 0.0f) break;
+					}
+					SA += SAk;
+				}
+				SA /= 8;
+			}
+			else {
+				SA = 1.0f;
+				for (int j = 1; j < 10; j++) {
+					SA *= models[j]->shadow_attenuation(p, L);
+					if (SA == 0.0f) break;
+				}
 			}
 			I += ((Ka * Ia + (1.0f - reflect) * SA * Kd * Id * std::max(glm::dot(N, L), 0.0f)) * texture_color +
 				   SA * Ks * Is * std::pow(std::max(glm::dot(V, R), 0.0f), n)) * intensity * alpha;

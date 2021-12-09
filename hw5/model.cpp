@@ -1,6 +1,7 @@
 #include "model.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include <unistd.h>
 
 static void parse_stl(std::string &&file_path, Points &points, Faces &faces, Material *material, bool angulated = false)
 {
@@ -85,7 +86,7 @@ static void collect_part(Points &to_points, Faces &to_faces, Points &from_points
 		to_faces.emplace_back(std::make_tuple(x + to_offset, y + to_offset, z + to_offset, m, t));
 }
 
-static bool ray_cube_intersect(glm::vec3 &p0, glm::vec3 &u, glm::vec3 &minB, glm::vec3 &maxB)
+static bool ray_cube_intersect(glm::vec3 &p0, glm::vec3 &u, glm::vec3 minB, glm::vec3 maxB)
 {
 	float tx1 = (minB.x - p0.x) / u.x;
 	float tx2 = (maxB.x - p0.x) / u.x;
@@ -172,7 +173,7 @@ void Model::collect(Points &global_points, Faces &opaque_faces, Faces &trans_fac
 }
 
 static std::tuple<float, Point, Material *, unsigned int, bool>
-recursive_nearest_intersect(Points &points, Faces &faces, glm::vec3 &p0, glm::vec3 &u, OctreeNode *now)
+recursive_nearest_intersect(Points &points, Faces &faces, glm::vec3 &p0, glm::vec3 &u, OctreeNode *now, glm::vec3 &motion)
 {
 	float min_dist = 999999999.0f;
 	Point p = std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f));
@@ -185,11 +186,12 @@ recursive_nearest_intersect(Points &points, Faces &faces, glm::vec3 &p0, glm::ve
 			auto &[v1, n1, t1] = points[p1];
 			auto &[v2, n2, t2] = points[p2];
 			auto &[v3, n3, t3] = points[p3];
+			glm::vec3 tv1 = v1 + motion, tv2 = v2 + motion, tv3 = v3 + motion;
 			glm::vec2 bary; float dist;
-			if (glm::intersectRayTriangle(p0, u, v1, v2, v3, bary, dist) && dist >= 0.001f && min_dist > dist) {
+			if (glm::intersectRayTriangle(p0, u, tv1, tv2, tv3, bary, dist) && dist >= 0.001f && min_dist > dist) {
 				is_valid = true;
 				min_dist = dist;
-				glm::vec3 v = (1.0f - bary.x - bary.y) * v1 + bary.x * v2 + bary.y * v3;
+				glm::vec3 v = (1.0f - bary.x - bary.y) * tv1 + bary.x * tv2 + bary.y * tv3;
 				glm::vec3 n = (1.0f - bary.x - bary.y) * n1 + bary.x * n2 + bary.y * n3;
 				glm::vec2 t = (1.0f - bary.x - bary.y) * t1 + bary.x * t2 + bary.y * t3;
 				p = std::make_tuple(v, n, t);
@@ -201,8 +203,8 @@ recursive_nearest_intersect(Points &points, Faces &faces, glm::vec3 &p0, glm::ve
 	}
 
 	for (int i = 0; i < 8; i++)
-		if (now->nodes[i] && ray_cube_intersect(p0, u, now->nodes[i]->minB, now->nodes[i]->maxB)) {
-			auto [min_dist_i, p_i, mat_i, tex_i, is_valid_i] = recursive_nearest_intersect(points, faces, p0, u, now->nodes[i]);
+		if (now->nodes[i] && ray_cube_intersect(p0, u, now->nodes[i]->minB + motion, now->nodes[i]->maxB + motion)) {
+			auto [min_dist_i, p_i, mat_i, tex_i, is_valid_i] = recursive_nearest_intersect(points, faces, p0, u, now->nodes[i], motion);
 			if (is_valid_i && min_dist > min_dist_i) {
 				is_valid = true;
 				min_dist = min_dist_i;
@@ -214,15 +216,15 @@ recursive_nearest_intersect(Points &points, Faces &faces, glm::vec3 &p0, glm::ve
 	return std::make_tuple(min_dist, p, mat, tex, is_valid);
 }
 
-std::tuple<float, Point, Material *, unsigned int, bool> Model::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
+std::tuple<float, Point, Material *, unsigned int, bool> Model::nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option)
 {
-	if (ray_cube_intersect(p0, u, top->minB, top->maxB))
-		return recursive_nearest_intersect(local_points, local_faces, p0, u, top);
+	if (ray_cube_intersect(p0, u, top->minB + motion, top->maxB + motion))
+		return recursive_nearest_intersect(local_points, local_faces, p0, u, top, motion);
 	return std::make_tuple(999999999.0f, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0, false);
 }
 
 static float recursive_shadow_attenuation(Points &points, Faces &faces,
-														glm::vec3 &p0, glm::vec3 &u, OctreeNode *now)
+									glm::vec3 &p0, glm::vec3 &u, OctreeNode *now, glm::vec3 &motion)
 {
 	float SA = 1.0f;
 
@@ -232,8 +234,9 @@ static float recursive_shadow_attenuation(Points &points, Faces &faces,
 			auto &[v1, n1, t1] = points[p1];
 			auto &[v2, n2, t2] = points[p2];
 			auto &[v3, n3, t3] = points[p3];
+			glm::vec3 tv1 = v1 + motion, tv2 = v2 + motion, tv3 = v3 + motion;
 			glm::vec2 bary; float dist;
-			if (glm::intersectRayTriangle(p0, u, v1, v2, v3, bary, dist) && dist >= 0.001f) {
+			if (glm::intersectRayTriangle(p0, u, tv1, tv2, tv3, bary, dist) && dist >= 0.001f) {
 				SA *= 1.0f - mi->ambient[3];
 				if (SA == 0.0f) return 0.0f;
 			}
@@ -242,8 +245,8 @@ static float recursive_shadow_attenuation(Points &points, Faces &faces,
 	}
 
 	for (int i = 0; i < 8; i++)
-		if (now->nodes[i] && ray_cube_intersect(p0, u, now->nodes[i]->minB, now->nodes[i]->maxB)) {
-			SA *= recursive_shadow_attenuation(points, faces, p0, u, now->nodes[i]);
+		if (now->nodes[i] && ray_cube_intersect(p0, u, now->nodes[i]->minB + motion, now->nodes[i]->maxB + motion)) {
+			SA *= recursive_shadow_attenuation(points, faces, p0, u, now->nodes[i], motion);
 			if (SA == 0.0f) return 0.0f;
 		}
 	return SA;
@@ -251,9 +254,14 @@ static float recursive_shadow_attenuation(Points &points, Faces &faces,
 
 float Model::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
 {
-	if (ray_cube_intersect(p0, u, top->minB, top->maxB))
-		return recursive_shadow_attenuation(local_points, local_faces, p0, u, top);
+	if (ray_cube_intersect(p0, u, top->minB + motion, top->maxB + motion))
+		return recursive_shadow_attenuation(local_points, local_faces, p0, u, top, motion);
 	return 1.0f;
+}
+
+void Model::set_motion(glm::vec3 m)
+{
+	motion = m;
 }
 
 Model &PokeBall::parse()
@@ -597,12 +605,31 @@ Model &MirrorSphere::parse()
 	return *this;
 }
 
-std::tuple<float, Point, Material *, unsigned int, bool> MirrorSphere::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
+std::tuple<float, Point, Material *, unsigned int, bool> MirrorSphere::nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option)
 {
 	glm::vec3 p, n;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(-0.07f, -0.51f, 0.854f), 0.4f, p, n) && glm::distance(p0, p) >= 0.001f)
+	if (glm::intersectRaySphere(p0, u, glm::vec3(-0.07f, -0.51f, 0.854f) + motion, 0.4f, p, n) && glm::distance(p0, p) >= 0.001f) {
+		n = glm::normalize(n);
+		float cos_theta = n.y;
+		float theta = std::acos(cos_theta);
+		float sin_theta = std::sqrt(1 - cos_theta * cos_theta);
+		float cos_phi = n.x / sin_theta, sin_phi = n.z / sin_theta;
+		float phi = std::atan2(sin_phi, cos_phi);
+		if (phi < 0) phi += 2.0f * M_PIf32;
+		if (option == BUMP_MAPPING) {
+			static float a = 0.025f, b = 16.0f;
+			float r = 0.4f + a * std::cos(b * phi) * std::sin(b * theta);
+			float drdphi = -a * b * std::sin(b * phi) * std::sin(b * theta);
+			float drdtheta = a * b * std::cos(b * phi) * std::cos(b * theta);
+			glm::vec3 dndphi = glm::vec3(-sin_theta * sin_phi, 0.0f, sin_theta * cos_phi);
+			glm::vec3 dndtheta = glm::vec3(cos_theta * cos_phi, -sin_theta, cos_theta * sin_phi);
+			glm::vec3 dpdphi = drdphi * n + r * dndphi;
+			glm::vec3 dpdtheta = drdtheta * n + r * dndtheta;
+			n = glm::normalize(n + drdphi * glm::cross(n, dpdphi) + drdtheta * glm::cross(n, dpdtheta));
+		}
 		return std::make_tuple(glm::distance(p0, p), std::make_tuple(p, n, glm::vec2(0.0f, 0.0f)), &mirror, 0, true);
+	}
 	return std::make_tuple(999999999.0f, std::make_tuple(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)), nullptr, 0, false);
 }
 
@@ -610,7 +637,7 @@ float MirrorSphere::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
 {
 	float dist;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(-0.07f, -0.51f, 0.854f), 0.16f, dist) && dist >= 0.001f)
+	if (glm::intersectRaySphere(p0, u, glm::vec3(-0.07f, -0.51f, 0.854f) + motion, 0.16f, dist) && dist >= 0.001f)
 		return 0.0f;
 	return 1.0f;
 }
@@ -686,16 +713,16 @@ Model &WoodenSphere::parse()
 	return *this;
 }
 
-std::tuple<float, Point, Material *, unsigned int, bool> WoodenSphere::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
+std::tuple<float, Point, Material *, unsigned int, bool> WoodenSphere::nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option)
 {
 	glm::vec3 p, n;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(0.937f, -0.51f, -0.877f), 0.4f, p, n) && glm::distance(p0, p) >= 0.001f) {
-		glm::vec3 q = glm::normalize(p - glm::vec3(0.937f, -0.51f, -0.877f));
-		float cos_theta = q.y;
+	if (glm::intersectRaySphere(p0, u, glm::vec3(0.937f, -0.51f, -0.877f) + motion, 0.4f, p, n) && glm::distance(p0, p) >= 0.001f) {
+		n = glm::normalize(n);
+		float cos_theta = n.y;
 		float theta = std::acos(cos_theta);
 		float sin_theta = std::sqrt(1 - cos_theta * cos_theta);
-		float cos_phi = q.x / sin_theta, sin_phi = q.z / sin_theta;
+		float cos_phi = n.x / sin_theta, sin_phi = n.z / sin_theta;
 		float phi = std::atan2(sin_phi, cos_phi);
 		if (phi < 0) phi += 2.0f * M_PIf32;
 		return std::make_tuple(glm::distance(p0, p), std::make_tuple(p, n, glm::vec2(phi / (2.0f * M_PIf32), theta / M_PIf32)), &default_material, texture, true);
@@ -707,7 +734,7 @@ float WoodenSphere::shadow_attenuation(glm::vec3 &p0, glm::vec3 &u)
 {
 	float dist;
 
-	if (glm::intersectRaySphere(p0, u, glm::vec3(0.937f, -0.51f, -0.877f), 0.16f, dist) && dist >= 0.001f)
+	if (glm::intersectRaySphere(p0, u, glm::vec3(0.937f, -0.51f, -0.877f) + motion, 0.16f, dist) && dist >= 0.001f)
 		return 0.0f;
 	return 1.0f;
 }
@@ -858,7 +885,7 @@ Model &Background::parse()
 	return *this;
 }
 
-std::tuple<float, Point, Material *, unsigned int, bool> Background::nearest_intersect(glm::vec3 &p0, glm::vec3 &u)
+std::tuple<float, Point, Material *, unsigned int, bool> Background::nearest_intersect(glm::vec3 &p0, glm::vec3 &u, Option option)
 {
 	glm::vec3 p, n;
 

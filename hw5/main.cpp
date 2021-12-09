@@ -201,35 +201,45 @@ void keyboardCB(unsigned char keyPressed, int x, int y)
 	{
 		auto filename = get_filename("images/raytraced_");
 		glm::vec3 camera =  origin + dist * axisZ;
-		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, DEFAULT);
+		glm::vec3 axisX = glm::cross(axisY, axisZ);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisX,
+							   axisY, lights, models, images, num_threads, DEFAULT);
 	}
 		break;
 	case 'c': // soft shadows
 	{
 		auto filename = get_filename("images/soft_shadows_");
-		glm::vec3 camera =  origin + dist * axisZ;
-		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, SOFT_SHADOWS);
+		glm::vec3 camera = origin + dist * axisZ;
+		glm::vec3 axisX = glm::cross(axisY, axisZ);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisX,
+							   axisY, lights, models, images, num_threads, SOFT_SHADOWS);
 	}
 		break;
 	case 'v': // depth of field
 	{
 		auto filename = get_filename("images/depth_of_field_");
-		glm::vec3 camera =  origin + dist * axisZ;
-		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, DEPTH_OF_FIELD);
+		glm::vec3 camera = origin + dist * axisZ;
+		glm::vec3 axisX = glm::cross(axisY, axisZ);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisX,
+							   axisY, lights, models, images, num_threads, DEPTH_OF_FIELD);
 	}
 		break;
 	case 'b': // motion blur
 	{
 		auto filename = get_filename("images/motion_blur_");
-		glm::vec3 camera =  origin + dist * axisZ;
-		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, MOTION_BLUR);
+		glm::vec3 camera = origin + dist * axisZ;
+		glm::vec3 axisX = glm::cross(axisY, axisZ);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisX,
+							   axisY, lights, models, images, num_threads, MOTION_BLUR);
 	}
 		break;
 	case 'n': // bump mapping
 	{
 		auto filename = get_filename("images/bump_mapping_");
-		glm::vec3 camera =  origin + dist * axisZ;
-		export_raytraced_image(filename, width, height, fovy, camera, origin, axisY, lights, models, images, num_threads, BUMP_MAPPING);
+		glm::vec3 camera = origin + dist * axisZ;
+		glm::vec3 axisX = glm::cross(axisY, axisZ);
+		export_raytraced_image(filename, width, height, fovy, camera, origin, axisX,
+							   axisY, lights, models, images, num_threads, BUMP_MAPPING);
 	}
 		break;
 	}

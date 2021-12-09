@@ -31,8 +31,8 @@ Material cyan_plastic = Material((GLfloat[4]){0.0f, 0.1f, 0.06f, 1.0f},
 							(GLfloat[4]){0.0f, 0.50980392f, 0.50980392f, 1.0f},
 							(GLfloat[4]){0.50196078f, 0.50196078f, 0.50196078f, 1.0f}, 32.0f, 0.0f);
 
-Material green_plastic = Material((GLfloat[4]){0.0f, 0.0f, 0.0f, 1.0f},
-							(GLfloat[4]){0.1f, 0.35f, 0.1f, 1.0f},
+Material green_plastic = Material((GLfloat[4]){0.01f, 0.035f, 0.01f, 1.0f},
+							(GLfloat[4]){0.09f, 0.315f, 0.09f, 1.0f},
 							(GLfloat[4]){0.45f, 0.55f, 0.45f, 1.0f}, 32.0f, 0.0f);
 
 Material red_plastic = Material((GLfloat[4]){0.05f, 0.0f, 0.0f, 1.0f},
@@ -62,4 +62,3 @@ Material purple_plastic = Material((GLfloat[4]){0.015f, 0.005f, 0.06f, 1.0f},
 Material pink_plastic = Material((GLfloat[4]){0.05f, 0.0f, 0.05f, 1.0f},
 							(GLfloat[4]){0.45f, 0.0f, 0.45f, 1.0f},
 							(GLfloat[4]){0.60f, 0.50f, 0.60f, 1.0f}, 32.0f, 0.0f);
-							
